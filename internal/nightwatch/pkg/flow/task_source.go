@@ -26,12 +26,22 @@ type TaskSource struct {
 var _ streams.Source = (*TaskSource)(nil)
 
 // NewTaskSource creates a new task source that fetches tasks from the task manager.
-func NewTaskSource(store interface{}, scope string, batchSize int) *TaskSource {
-	return &TaskSource{
-		taskManager: store, // This should implement TaskManager interface
-		scope:       scope,
+func NewTaskSource(taskManager types.TaskManager, batchSize int) *TaskSource {
+	ctx, cancel := context.WithCancel(context.Background())
+	taskChan := make(chan any, 100)
+
+	source := &TaskSource{
+		ChanSource:  extension.NewChanSource(taskChan),
+		ctx:         ctx,
+		cancelCtx:   cancel,
+		taskChan:    taskChan,
+		taskManager: taskManager,
 		batchSize:   batchSize,
+		interval:    5 * time.Second, // Default interval
 	}
+
+	go source.doStream()
+	return source
 }
 
 // NewTaskSourceWithContext creates a new task source that fetches tasks from a task manager.

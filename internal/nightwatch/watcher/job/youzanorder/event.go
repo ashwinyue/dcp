@@ -6,32 +6,30 @@ import (
 	"time"
 
 	"github.com/onexstack/onexstack/pkg/store/where"
-	"github.com/sirupsen/logrus"
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/batch"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
+	"github.com/ashwinyue/dcp/internal/pkg/log"
 )
 
 // EventHandler handles YouZan order processing events.
 type EventHandler struct {
 	store       store.IStore
-	logger      *logrus.Entry
 	taskManager *batch.TaskManager
 }
 
 // NewEventHandler creates a new event handler for YouZan order processing.
-func NewEventHandler(store store.IStore, logger *logrus.Entry, taskManager *batch.TaskManager) *EventHandler {
+func NewEventHandler(store store.IStore, taskManager *batch.TaskManager) *EventHandler {
 	return &EventHandler{
 		store:       store,
-		logger:      logger,
 		taskManager: taskManager,
 	}
 }
 
 // Fetch handles the order fetching event.
 func (eh *EventHandler) Fetch(ctx context.Context, jobID string) error {
-	eh.logger.WithField("job_id", jobID).Info("Starting YouZan order fetching")
+	log.Infow("Starting YouZan order fetching", "job_id", jobID)
 
 	// Update job status to fetching
 	if err := eh.updateJobStatus(ctx, jobID, known.YouZanOrderFetching); err != nil {
@@ -61,17 +59,14 @@ func (eh *EventHandler) Fetch(ctx context.Context, jobID string) error {
 		return fmt.Errorf("failed to create YouZan order task: %w", err)
 	}
 
-	eh.logger.WithFields(logrus.Fields{
-		"job_id":  jobID,
-		"task_id": taskResp.TaskID,
-	}).Info("YouZan order fetching completed")
+	log.Infow("YouZan order fetching completed", "job_id", jobID, "task_id", taskResp.TaskID)
 
 	return nil
 }
 
 // Validate handles the order validation event.
 func (eh *EventHandler) Validate(ctx context.Context, jobID string) error {
-	eh.logger.WithField("job_id", jobID).Info("Starting YouZan order validation")
+	log.Infow("Starting YouZan order validation", "job_id", jobID)
 
 	// Update job status to validating
 	if err := eh.updateJobStatus(ctx, jobID, known.YouZanOrderValidating); err != nil {
@@ -86,13 +81,13 @@ func (eh *EventHandler) Validate(ctx context.Context, jobID string) error {
 	// Simulate validation process
 	time.Sleep(1 * time.Second)
 
-	eh.logger.WithField("job_id", jobID).Info("YouZan order validation completed")
+	log.Infow("YouZan order validation completed", "job_id", jobID)
 	return nil
 }
 
 // Enrich handles the order enrichment event.
 func (eh *EventHandler) Enrich(ctx context.Context, jobID string) error {
-	eh.logger.WithField("job_id", jobID).Info("Starting YouZan order enrichment")
+	log.Infow("Starting YouZan order enrichment", "job_id", jobID)
 
 	// Update job status to enriching
 	if err := eh.updateJobStatus(ctx, jobID, known.YouZanOrderEnriching); err != nil {
@@ -107,13 +102,13 @@ func (eh *EventHandler) Enrich(ctx context.Context, jobID string) error {
 	// Simulate enrichment process
 	time.Sleep(3 * time.Second)
 
-	eh.logger.WithField("job_id", jobID).Info("YouZan order enrichment completed")
+	log.Infow("YouZan order enrichment completed", "job_id", jobID)
 	return nil
 }
 
 // Process handles the order processing event.
 func (eh *EventHandler) Process(ctx context.Context, jobID string) error {
-	eh.logger.WithField("job_id", jobID).Info("Starting YouZan order processing")
+	log.Infow("Starting YouZan order processing", "job_id", jobID)
 
 	// Update job status to processing
 	if err := eh.updateJobStatus(ctx, jobID, known.YouZanOrderProcessing); err != nil {
@@ -136,16 +131,12 @@ func (eh *EventHandler) Process(ctx context.Context, jobID string) error {
 	// Process each task
 	for _, task := range tasksResp.Tasks {
 		if err := eh.taskManager.ProcessTask(task.ID); err != nil {
-			eh.logger.WithFields(logrus.Fields{
-				"job_id":  jobID,
-				"task_id": task.ID,
-				"error":   err,
-			}).Error("Failed to process YouZan order task")
+			log.Errorw("Failed to process YouZan order task", "job_id", jobID, "task_id", task.ID, "error", err)
 			return fmt.Errorf("failed to process task %s: %w", task.ID, err)
 		}
 	}
 
-	eh.logger.WithField("job_id", jobID).Info("YouZan order processing completed")
+	log.Infow("YouZan order processing completed", "job_id", jobID)
 	return nil
 }
 
@@ -175,11 +166,7 @@ func (eh *EventHandler) checkTimeout(ctx context.Context, jobID string) error {
 
 	// Check if job has exceeded timeout
 	if time.Since(jobObj.CreatedAt) > time.Duration(known.YouZanOrderTimeout)*time.Second {
-		eh.logger.WithFields(logrus.Fields{
-			"job_id":     jobID,
-			"created_at": jobObj.CreatedAt,
-			"timeout":    known.YouZanOrderTimeout,
-		}).Warn("YouZan order job has exceeded timeout")
+		log.Warnw("YouZan order job has exceeded timeout", "job_id", jobID, "created_at", jobObj.CreatedAt, "timeout", known.YouZanOrderTimeout)
 
 		// Update job status to failed
 		jobObj.Status = known.YouZanOrderFailed

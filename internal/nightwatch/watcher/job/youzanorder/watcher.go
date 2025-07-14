@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ashwinyue/dcp/internal/pkg/log"
 	"github.com/gammazero/workerpool"
-	"github.com/marmotedu/miniblog/internal/pkg/log"
 	"github.com/onexstack/onexstack/pkg/store/where"
 	"github.com/onexstack/onexstack/pkg/watch/registry"
 	"go.uber.org/ratelimit"
@@ -20,6 +20,25 @@ import (
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
 	"github.com/ashwinyue/dcp/pkg/streams"
 )
+
+// loggerAdapter adapts the internal log package to the batch Logger interface.
+type loggerAdapter struct{}
+
+func (l *loggerAdapter) Info(msg string, keysAndValues ...interface{}) {
+	log.Infow(msg, keysAndValues...)
+}
+
+func (l *loggerAdapter) Error(msg string, keysAndValues ...interface{}) {
+	log.Errorw(nil, msg, keysAndValues...)
+}
+
+func (l *loggerAdapter) Debug(msg string, keysAndValues ...interface{}) {
+	log.Debugw(msg, keysAndValues...)
+}
+
+func (l *loggerAdapter) Warn(msg string, keysAndValues ...interface{}) {
+	log.Warnw(msg, keysAndValues...)
+}
 
 // Ensure Watcher implements the registry.Watcher interface.
 var _ registry.Watcher = (*Watcher)(nil)
@@ -40,6 +59,9 @@ type Watcher struct {
 	MaxWorkers int64
 	// Rate limiters for operations.
 	Limiter Limiter
+
+	// Task manager for batch processing
+	TaskManager *batch.TaskManager
 
 	// Flow pipeline components
 	TaskSource     *flow.TaskSource
@@ -138,6 +160,9 @@ func (w *Watcher) SetMaxWorkers(maxWorkers int64) {
 
 // InitializePipeline sets up the processing pipeline with flow components.
 func (w *Watcher) InitializePipeline() error {
+	// Create logger adapter to bridge internal log package with batch Logger interface
+	loggerAdapter := &loggerAdapter{}
+
 	// Set default pipeline configuration if not provided
 	if w.PipelineConfig == nil {
 		w.PipelineConfig = &PipelineConfig{
@@ -148,34 +173,39 @@ func (w *Watcher) InitializePipeline() error {
 		}
 	}
 
+	// Initialize task manager if not already done
+	if w.TaskManager == nil {
+		w.TaskManager = batch.NewTaskManager(context.Background(), loggerAdapter)
+	}
+
 	// Initialize task source
-	w.TaskSource = flow.NewTaskSource(w.Store, known.YouZanOrderJobScope, w.PipelineConfig.BatchSize)
+	w.TaskSource = flow.NewTaskSource(w.TaskManager, w.PipelineConfig.BatchSize)
 
 	// Initialize validation flow
 	w.ValidationFlow = flow.NewValidationFlow(
 		w.validateYouZanOrderTask,
-		log.L(),
+		loggerAdapter,
 		w.PipelineConfig.Parallelism,
 	)
 
 	// Initialize filter flow
 	w.FilterFlow = flow.NewFilterFlow(
 		w.filterRunnableTask,
-		log.L(),
+		loggerAdapter,
 		w.PipelineConfig.Parallelism,
 	)
 
 	// Initialize transform flow
 	w.TransformFlow = flow.NewTransformFlow(
 		w.transformJobToBatch,
-		log.L(),
+		loggerAdapter,
 		w.PipelineConfig.Parallelism,
 	)
 
 	// Initialize processor sink
 	w.ProcessorSink = flow.NewProcessorSink(
 		w.processYouZanOrderBatch,
-		log.L(),
+		loggerAdapter,
 		w.PipelineConfig.Parallelism,
 	)
 
@@ -217,21 +247,15 @@ func (w *Watcher) validateYouZanOrderTask(ctx types.ProcessingContext, item *typ
 		return fmt.Errorf("task is nil")
 	}
 
-	// Validate task scope
-	if task.Scope != known.YouZanOrderJobScope {
-		return fmt.Errorf("invalid task scope: %s", task.Scope)
+	// Validate task type
+	if task.Type != types.TaskTypeYouZanOrder {
+		return fmt.Errorf("invalid task type: %s", task.Type)
 	}
 
 	// Validate task status
-	validStatuses := map[string]bool{
-		known.YouZanOrderPending:    true,
-		known.YouZanOrderFetching:   true,
-		known.YouZanOrderFetched:    true,
-		known.YouZanOrderValidating: true,
-		known.YouZanOrderValidated:  true,
-		known.YouZanOrderEnriching:  true,
-		known.YouZanOrderEnriched:   true,
-		known.YouZanOrderProcessing: true,
+	validStatuses := map[types.TaskStatus]bool{
+		types.TaskStatusPending:    true,
+		types.TaskStatusProcessing: true,
 	}
 
 	if !validStatuses[task.Status] {
@@ -248,13 +272,18 @@ func (w *Watcher) filterRunnableTask(item any) bool {
 		return false
 	}
 
-	// Filter suspended tasks
-	if task.Suspended {
+	// Filter failed tasks
+	if task.Status == types.TaskStatusFailed {
 		return false
 	}
 
-	// Filter failed tasks that exceeded retry attempts
-	if task.Status == types.TaskStatusFailed && task.RetryCount >= w.PipelineConfig.RetryAttempts {
+	// Filter completed tasks
+	if task.Status == types.TaskStatusCompleted {
+		return false
+	}
+
+	// Filter cancelled tasks
+	if task.Status == types.TaskStatusCancelled {
 		return false
 	}
 
