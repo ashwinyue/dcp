@@ -5,40 +5,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ashwinyue/dcp/internal/pkg/log"
 	"github.com/gammazero/workerpool"
 	"github.com/onexstack/onexstack/pkg/store/where"
 	"github.com/onexstack/onexstack/pkg/watch/registry"
 	"go.uber.org/ratelimit"
 
-	"github.com/ashwinyue/dcp/internal/nightwatch/batch"
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
-	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/flow"
-	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/types"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/nightwatch/watcher"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
+	"github.com/ashwinyue/dcp/internal/pkg
 	"github.com/ashwinyue/dcp/pkg/streams"
+	"github.com/ashwinyue/dcp/pkg/streams/flow"
 )
-
-// loggerAdapter adapts the internal log package to the batch Logger interface.
-type loggerAdapter struct{}
-
-func (l *loggerAdapter) Info(msg string, keysAndValues ...interface{}) {
-	log.Infow(msg, keysAndValues...)
-}
-
-func (l *loggerAdapter) Error(msg string, keysAndValues ...interface{}) {
-	log.Errorw(nil, msg, keysAndValues...)
-}
-
-func (l *loggerAdapter) Debug(msg string, keysAndValues ...interface{}) {
-	log.Debugw(msg, keysAndValues...)
-}
-
-func (l *loggerAdapter) Warn(msg string, keysAndValues ...interface{}) {
-	log.Warnw(msg, keysAndValues...)
-}
 
 // Ensure Watcher implements the registry.Watcher interface.
 var _ registry.Watcher = (*Watcher)(nil)
@@ -51,7 +30,155 @@ type Limiter struct {
 	Process  ratelimit.Limiter
 }
 
-// Watcher monitors and processes YouZan order jobs.
+// JobSource implements streams.Source for reading jobs from database.
+type JobSource struct {
+	store      store.IStore
+	scope      string
+	watcher    string
+	statuses   []string
+	interval   time.Duration
+	out        chan any
+	ctx        context.Context
+	cancelFunc context.CancelFunc
+}
+
+// NewJobSource creates a new JobSource instance.
+func NewJobSource(store store.IStore, scope, watcher string, statuses []string, interval time.Duration) *JobSource {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	source := &JobSource{
+		store:      store,
+		scope:      scope,
+		watcher:    watcher,
+		statuses:   statuses,
+		interval:   interval,
+		out:        make(chan any),
+		ctx:        ctx,
+		cancelFunc: cancel,
+	}
+
+	go source.start()
+	return source
+}
+
+// Out returns the output channel for reading jobs.
+func (s *JobSource) Out() <-chan any {
+	return s.out
+}
+
+// Via connects this source to a flow.
+func (s *JobSource) Via(flow streams.Flow) streams.Flow {
+	go func() {
+		for job := range s.Out() {
+			flow.In() <- job
+		}
+		close(flow.In())
+	}()
+	return flow
+}
+
+// Stop stops the source.
+func (s *JobSource) Stop() {
+	s.cancelFunc()
+}
+
+// start begins the job reading process.
+func (s *JobSource) start() {
+	defer close(s.out)
+
+	ticker := time.NewTicker(s.interval)
+	defer ticker.Stop()
+
+	log.Infow("JobSource started", "scope", s.scope, "watcher", s.watcher, "interval", s.interval)
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			log.Infow("JobSource stopped")
+			return
+		case <-ticker.C:
+			s.readJobs()
+		}
+	}
+}
+
+// readJobs reads jobs from database and sends them to the output channel.
+func (s *JobSource) readJobs() {
+	ctx := context.Background()
+
+	// Build query conditions
+	conditions := where.F(
+		"scope", s.scope,
+		"watcher", s.watcher,
+		"status", s.statuses,
+		"suspend", known.JobNonSuspended,
+	)
+
+	// Query jobs
+	_, jobs, err := s.store.Job().List(ctx, conditions)
+	if err != nil {
+		log.Errorw("Failed to read jobs from database", "error", err)
+		return
+	}
+
+	if len(jobs) == 0 {
+		return
+	}
+
+	log.Infow("Read jobs from database", "count", len(jobs), "scope", s.scope, "watcher", s.watcher)
+
+	// Send jobs to output channel
+	for _, job := range jobs {
+		select {
+		case s.out <- job:
+		case <-s.ctx.Done():
+			return
+		}
+	}
+}
+
+// DatabaseSink implements streams.Sink for writing jobs to database.
+type DatabaseSink struct {
+	store store.IStore
+	in    chan any
+}
+
+// NewDatabaseSink creates a new DatabaseSink instance.
+func NewDatabaseSink(store store.IStore) *DatabaseSink {
+	sink := &DatabaseSink{
+		store: store,
+		in:    make(chan any),
+	}
+
+	go sink.start()
+	return sink
+}
+
+// In returns the input channel for receiving jobs.
+func (s *DatabaseSink) In() chan<- any {
+	return s.in
+}
+
+// start begins the job writing process.
+func (s *DatabaseSink) start() {
+	for jobAny := range s.in {
+		job, ok := jobAny.(*model.JobM)
+		if !ok {
+			log.Errorw("Invalid job type received in DatabaseSink")
+			continue
+		}
+
+		ctx := context.Background()
+		err := s.store.Job().Update(ctx, job)
+		if err != nil {
+			log.Errorw("Failed to update job in database", "jobID", job.JobID, "error", err)
+		} else {
+			log.Infow("Job updated successfully", "jobID", job.JobID, "status", job.Status)
+		}
+	}
+}
+
+// Watcher monitors and processes YouZan order jobs using streams.
 type Watcher struct {
 	Store store.IStore
 
@@ -60,89 +187,90 @@ type Watcher struct {
 	// Rate limiters for operations.
 	Limiter Limiter
 
-	// Task manager for batch processing
-	TaskManager *batch.TaskManager
+	// Streams components
+	source *JobSource
+	sink   *DatabaseSink
 
-	// Flow pipeline components
-	TaskSource     *flow.TaskSource
-	ValidationFlow *flow.ValidationFlow
-	FilterFlow     *flow.FilterFlow
-	TransformFlow  *flow.TransformFlow[*model.JobM, *batch.YouZanOrderBatch]
-	ProcessorSink  *flow.ProcessorSink
-
-	// Pipeline configuration
-	PipelineConfig *PipelineConfig
+	// YouZan API client
+	youZanClient *YouZanClient
 }
 
-// PipelineConfig holds configuration for the processing pipeline.
-type PipelineConfig struct {
-	Parallelism     uint
-	BatchSize       int
-	TimeoutDuration time.Duration
-	RetryAttempts   int
-}
-
-// Run executes the watcher logic to process jobs.
+// Run executes the watcher logic using streams pipeline.
 func (w *Watcher) Run() {
 	ctx := context.Background()
+	log.Infow("Starting YouZan order watcher with streams")
 
-	// Try to run the new pipeline first
-	if err := w.RunPipeline(ctx); err != nil {
-		log.Errorw(err, "Pipeline execution failed, falling back to legacy processing")
-		w.runLegacyProcessing(ctx)
-	} else {
-		log.Infow("Pipeline execution completed successfully")
-	}
+	// Create source for reading jobs
+	w.source = NewJobSource(
+		w.Store,
+		known.YouZanOrderJobScope,
+		known.YouZanOrderWatcher,
+		[]string{
+			known.YouZanOrderPending,
+			known.YouZanOrderFetching,
+			known.YouZanOrderFetched,
+			known.YouZanOrderValidating,
+			known.YouZanOrderValidated,
+			known.YouZanOrderEnriching,
+			known.YouZanOrderEnriched,
+			known.YouZanOrderProcessing,
+		},
+		5*time.Second,
+	)
+
+	// Create sink for writing jobs
+	w.sink = NewDatabaseSink(w.Store)
+
+	// Create processing pipeline with Map operations
+	processor := flow.NewMap(func(jobAny any) any {
+		job := jobAny.(*model.JobM)
+		return w.processJobWithStreams(ctx, job)
+	}, uint(w.MaxWorkers))
+
+	// Connect the pipeline: source -> processor -> sink
+	w.source.Via(processor).To(w.sink)
+
+	log.Infow("YouZan order watcher streams pipeline started")
 }
 
-// runLegacyProcessing runs the original processing logic as fallback.
-func (w *Watcher) runLegacyProcessing(ctx context.Context) {
-	// Define the phases that the watcher can handle.
-	runablePhase := []string{
-		known.YouZanOrderPending,
-		known.YouZanOrderFetching,
-		known.YouZanOrderFetched,
-		known.YouZanOrderValidating,
-		known.YouZanOrderValidated,
-		known.YouZanOrderEnriching,
-		known.YouZanOrderEnriched,
-		known.YouZanOrderProcessing,
-		known.YouZanOrderProcessed,
+// processJobWithStreams processes a single job using streams approach.
+func (w *Watcher) processJobWithStreams(ctx context.Context, job *model.JobM) *model.JobM {
+	log.Infow("Processing YouZan order job", "jobID", job.JobID, "status", job.Status)
+
+	// Create state machine for this job
+	sm := NewStateMachine(job.Status, w, job)
+
+	// Process the job based on current status using state machine
+	switch job.Status {
+	case known.YouZanOrderPending:
+		sm.Fetch()
+	case known.YouZanOrderFetching:
+		sm.Fetch()
+	case known.YouZanOrderFetched:
+		sm.Validate()
+	case known.YouZanOrderValidating:
+		sm.Validate()
+	case known.YouZanOrderValidated:
+		sm.Enrich()
+	case known.YouZanOrderEnriching:
+		sm.Enrich()
+	case known.YouZanOrderEnriched:
+		sm.Process()
+	case known.YouZanOrderProcessing:
+		sm.Process()
+	default:
+		log.Infow("Job status does not require processing", "jobID", job.JobID, "status", job.Status)
 	}
 
-	_, jobs, err := w.Store.Job().List(ctx, where.F(
-		"scope", known.YouZanOrderJobScope,
-		"watcher", known.YouZanOrderWatcher,
-		"status", runablePhase,
-		"suspend", known.JobNonSuspended,
-	))
-	if err != nil {
-		log.Errorw(err, "Failed to get runnable jobs")
-		return
-	}
-
-	wp := workerpool.New(int(w.MaxWorkers))
-	for _, job := range jobs {
-		log.W(ctx).Infow("Start to process YouZan order")
-
-		wp.Submit(func() {
-			sm := NewStateMachine(job.Status, w, job)
-			if err := sm.FSM.Event(ctx, job.Status); err != nil {
-				log.Errorw(err, "FSM event processing failed", "jobID", job.ID, "status", job.Status)
-				return
-			}
-		})
-	}
-
-	wp.StopWait()
+	return job
 }
 
 // Spec returns the cron job specification for scheduling.
 func (w *Watcher) Spec() string {
-	return "@every 1s"
+	return known.YouZanOrderWatcherSpec
 }
 
-// SetAggregateConfig configures the watcher with the provided aggregate configuration.
+// SetAggregateConfig sets the aggregate configuration for the watcher.
 func (w *Watcher) SetAggregateConfig(config *watcher.AggregateConfig) {
 	w.Store = config.Store
 	w.Limiter = Limiter{
@@ -151,6 +279,14 @@ func (w *Watcher) SetAggregateConfig(config *watcher.AggregateConfig) {
 		Enrich:   ratelimit.New(known.YouZanOrderEnrichQPS),
 		Process:  ratelimit.New(known.YouZanOrderProcessQPS),
 	}
+
+	// Initialize YouZan client with configuration
+	config := GetDefaultConfig()
+	w.youZanClient = NewYouZanClient(
+		config.API.BaseURL,
+		config.API.AppID,
+		config.API.AppSecret,
+	)
 }
 
 // SetMaxWorkers sets the maximum number of concurrent workers for the watcher.
@@ -158,379 +294,218 @@ func (w *Watcher) SetMaxWorkers(maxWorkers int64) {
 	w.MaxWorkers = maxWorkers
 }
 
-// InitializePipeline sets up the processing pipeline with flow components.
-func (w *Watcher) InitializePipeline() error {
-	// Create logger adapter to bridge internal log package with batch Logger interface
-	loggerAdapter := &loggerAdapter{}
-
-	// Set default pipeline configuration if not provided
-	if w.PipelineConfig == nil {
-		w.PipelineConfig = &PipelineConfig{
-			Parallelism:     4,
-			BatchSize:       100,
-			TimeoutDuration: 30 * time.Second,
-			RetryAttempts:   3,
-		}
-	}
-
-	// Initialize task manager if not already done
-	if w.TaskManager == nil {
-		w.TaskManager = batch.NewTaskManager(context.Background(), loggerAdapter)
-	}
-
-	// Initialize task source
-	w.TaskSource = flow.NewTaskSource(w.TaskManager, w.PipelineConfig.BatchSize)
-
-	// Initialize validation flow
-	w.ValidationFlow = flow.NewValidationFlow(
-		w.validateYouZanOrderTask,
-		loggerAdapter,
-		w.PipelineConfig.Parallelism,
-	)
-
-	// Initialize filter flow
-	w.FilterFlow = flow.NewFilterFlow(
-		w.filterRunnableTask,
-		loggerAdapter,
-		w.PipelineConfig.Parallelism,
-	)
-
-	// Initialize transform flow
-	w.TransformFlow = flow.NewTransformFlow(
-		w.transformJobToBatch,
-		loggerAdapter,
-		w.PipelineConfig.Parallelism,
-	)
-
-	// Initialize processor sink
-	w.ProcessorSink = flow.NewProcessorSink(
-		w.processYouZanOrderBatch,
-		loggerAdapter,
-		w.PipelineConfig.Parallelism,
-	)
-
-	return nil
+// SetStore sets the store for the watcher (for interface compatibility).
+func (w *Watcher) SetStore(store store.IStore) {
+	w.Store = store
 }
 
-// RunPipeline executes the complete processing pipeline.
-func (w *Watcher) RunPipeline(ctx context.Context) error {
-	// Initialize pipeline if not already done
-	if w.TaskSource == nil {
-		if err := w.InitializePipeline(); err != nil {
-			return fmt.Errorf("failed to initialize pipeline: %w", err)
-		}
-	}
-
-	// Connect the pipeline components
-	pipeline := w.TaskSource.
-		Via(w.ValidationFlow).
-		Via(w.FilterFlow).
-		Via(w.TransformFlow).
-		To(w.ProcessorSink)
-
-	// Run the pipeline
-	log.Infow("Starting YouZan order processing pipeline")
-	if err := pipeline.Run(ctx); err != nil {
-		return fmt.Errorf("pipeline execution failed: %w", err)
-	}
-
-	log.Infow("YouZan order processing pipeline completed")
-	return nil
+// GetMaxWorkers returns the maximum number of workers.
+func (w *Watcher) GetMaxWorkers() int64 {
+	return w.MaxWorkers
 }
 
-// validateYouZanOrderTask validates a YouZan order task.
-func (w *Watcher) validateYouZanOrderTask(ctx types.ProcessingContext, item *types.BatchItem[*types.BatchTask]) error {
-	w.Limiter.Validate.Take()
-
-	task := item.Data
-	if task == nil {
-		return fmt.Errorf("task is nil")
-	}
-
-	// Validate task type
-	if task.Type != types.TaskTypeYouZanOrder {
-		return fmt.Errorf("invalid task type: %s", task.Type)
-	}
-
-	// Validate task status
-	validStatuses := map[types.TaskStatus]bool{
-		types.TaskStatusPending:    true,
-		types.TaskStatusProcessing: true,
-	}
-
-	if !validStatuses[task.Status] {
-		return fmt.Errorf("invalid task status: %s", task.Status)
-	}
-
-	return nil
-}
-
-// filterRunnableTask filters tasks that can be processed.
-func (w *Watcher) filterRunnableTask(item any) bool {
-	task, ok := item.(*types.BatchTask)
-	if !ok {
-		return false
-	}
-
-	// Filter failed tasks
-	if task.Status == types.TaskStatusFailed {
-		return false
-	}
-
-	// Filter completed tasks
-	if task.Status == types.TaskStatusCompleted {
-		return false
-	}
-
-	// Filter cancelled tasks
-	if task.Status == types.TaskStatusCancelled {
-		return false
-	}
-
-	return true
-}
-
-// transformJobToBatch transforms a job into a YouZan order batch.
-func (w *Watcher) transformJobToBatch(ctx types.ProcessingContext, item *types.BatchItem[*model.JobM]) (*types.BatchItem[*batch.YouZanOrderBatch], error) {
-	w.Limiter.Enrich.Take()
-
-	job := item.Data
-	if job == nil {
-		return nil, fmt.Errorf("job is nil")
-	}
-
-	// Create YouZan order batch from job
-	youzanBatch := &batch.YouZanOrderBatch{
-		JobID:     job.JobID,
-		Scope:     job.Scope,
-		Status:    job.Status,
-		CreatedAt: job.CreatedAt,
-		UpdatedAt: time.Now(),
-		Metadata:  make(map[string]interface{}),
-	}
-
-	// Transform job-specific data
-	if err := w.enrichYouZanOrderBatch(ctx, youzanBatch); err != nil {
-		return nil, fmt.Errorf("failed to enrich YouZan order batch: %w", err)
-	}
-
-	transformedItem := &types.BatchItem[*batch.YouZanOrderBatch]{
-		ID:        item.ID,
-		Data:      youzanBatch,
-		CreatedAt: item.CreatedAt,
-	}
-
-	return transformedItem, nil
-}
-
-// enrichYouZanOrderBatch enriches the YouZan order batch with additional data.
-func (w *Watcher) enrichYouZanOrderBatch(ctx types.ProcessingContext, batch *batch.YouZanOrderBatch) error {
-	// Add enrichment logic here
-	// For example: fetch additional order details, validate data, etc.
-	log.Infow("Enriching YouZan order batch", "jobID", batch.JobID, "status", batch.Status)
-	return nil
-}
-
-// processYouZanOrderBatch processes a YouZan order batch.
-func (w *Watcher) processYouZanOrderBatch(ctx types.ProcessingContext, item *types.BatchItem[*batch.YouZanOrderBatch]) error {
-	w.Limiter.Process.Take()
-
-	batch := item.Data
-	if batch == nil {
-		return fmt.Errorf("batch is nil")
-	}
-
-	log.Infow("Processing YouZan order batch", "jobID", batch.JobID, "status", batch.Status)
-
-	// Process based on current status
-	switch batch.Status {
-	case known.YouZanOrderPending:
-		return w.handlePendingOrder(ctx, batch)
-	case known.YouZanOrderFetching:
-		return w.handleFetchingOrder(ctx, batch)
-	case known.YouZanOrderFetched:
-		return w.handleFetchedOrder(ctx, batch)
-	case known.YouZanOrderValidating:
-		return w.handleValidatingOrder(ctx, batch)
-	case known.YouZanOrderValidated:
-		return w.handleValidatedOrder(ctx, batch)
-	case known.YouZanOrderEnriching:
-		return w.handleEnrichingOrder(ctx, batch)
-	case known.YouZanOrderEnriched:
-		return w.handleEnrichedOrder(ctx, batch)
-	case known.YouZanOrderProcessing:
-		return w.handleProcessingOrder(ctx, batch)
-	default:
-		return fmt.Errorf("unknown order status: %s", batch.Status)
+// Stop stops the watcher and all its components.
+func (w *Watcher) Stop() {
+	if w.source != nil {
+		w.source.Stop()
 	}
 }
 
-// handlePendingOrder handles orders in pending status.
-func (w *Watcher) handlePendingOrder(ctx types.ProcessingContext, batch *batch.YouZanOrderBatch) error {
+// Rate limiting methods for different operations
+func (w *Watcher) takeFetchLimit() {
 	w.Limiter.Fetch.Take()
-	log.Infow("Handling pending YouZan order", "jobID", batch.JobID)
-	// Add pending order handling logic
-	return nil
 }
 
-// handleFetchingOrder handles orders in fetching status.
-func (w *Watcher) handleFetchingOrder(ctx types.ProcessingContext, batch *batch.YouZanOrderBatch) error {
-	w.Limiter.Fetch.Take()
-	log.Infow("Handling fetching YouZan order", "jobID", batch.JobID)
-	// Add fetching order handling logic
-	return nil
-}
-
-// handleFetchedOrder handles orders in fetched status.
-func (w *Watcher) handleFetchedOrder(ctx types.ProcessingContext, batch *batch.YouZanOrderBatch) error {
-	log.Infow("Handling fetched YouZan order", "jobID", batch.JobID)
-	// Add fetched order handling logic
-	return nil
-}
-
-// handleValidatingOrder handles orders in validating status.
-func (w *Watcher) handleValidatingOrder(ctx types.ProcessingContext, batch *batch.YouZanOrderBatch) error {
+func (w *Watcher) takeValidateLimit() {
 	w.Limiter.Validate.Take()
-	log.Infow("Handling validating YouZan order", "jobID", batch.JobID)
-	// Add validating order handling logic
-	return nil
 }
 
-// handleValidatedOrder handles orders in validated status.
-func (w *Watcher) handleValidatedOrder(ctx types.ProcessingContext, batch *batch.YouZanOrderBatch) error {
-	log.Infow("Handling validated YouZan order", "jobID", batch.JobID)
-	// Add validated order handling logic
-	return nil
-}
-
-// handleEnrichingOrder handles orders in enriching status.
-func (w *Watcher) handleEnrichingOrder(ctx types.ProcessingContext, batch *batch.YouZanOrderBatch) error {
+func (w *Watcher) takeEnrichLimit() {
 	w.Limiter.Enrich.Take()
-	log.Infow("Handling enriching YouZan order", "jobID", batch.JobID)
-	// Add enriching order handling logic
-	return nil
 }
 
-// handleEnrichedOrder handles orders in enriched status.
-func (w *Watcher) handleEnrichedOrder(ctx types.ProcessingContext, batch *batch.YouZanOrderBatch) error {
-	log.Infow("Handling enriched YouZan order", "jobID", batch.JobID)
-	// Add enriched order handling logic
-	return nil
-}
-
-// handleProcessingOrder handles orders in processing status.
-func (w *Watcher) handleProcessingOrder(ctx types.ProcessingContext, batch *batch.YouZanOrderBatch) error {
+func (w *Watcher) takeProcessLimit() {
 	w.Limiter.Process.Take()
-	log.Infow("Handling processing YouZan order", "jobID", batch.JobID)
-	// Add processing order handling logic
-	return nil
 }
 
-// UpdateJobState updates the job state in the database.
-func (w *Watcher) UpdateJobState(ctx context.Context, jobID int64, state string) error {
-	jobObj, err := w.Store.Job().Get(ctx, where.F("id", jobID))
-	if err != nil {
-		return fmt.Errorf("failed to get job %d: %w", jobID, err)
-	}
-
-	jobObj.Status = state
-	jobObj.UpdatedAt = time.Now()
-
-	if err := w.Store.Job().Update(ctx, jobObj); err != nil {
-		return fmt.Errorf("failed to update job %d state to %s: %w", jobID, state, err)
-	}
-
-	log.Infow("Updated job state", "jobID", jobID, "state", state)
-	return nil
-}
-
-// FetchOrder handles the order fetching logic.
+// Business logic methods (实现具体的有赞订单业务逻辑)
 func (w *Watcher) FetchOrder(ctx context.Context, job *model.JobM) error {
-	w.Limiter.Fetch.Take()
-	log.Infow("Fetching YouZan order", "jobID", job.JobID)
+	w.takeFetchLimit()
+	log.Infow("Fetching YouZan orders", "jobID", job.JobID)
 
-	// Simulate fetching from YouZan API
-	time.Sleep(2 * time.Second)
-
-	// Update job progress
-	if err := w.updateJobProgress(ctx, job.ID, 25); err != nil {
-		return fmt.Errorf("failed to update job progress: %w", err)
+	// Validate job parameters
+	if err := validateJobParameters(job); err != nil {
+		return fmt.Errorf("invalid job parameters: %w", err)
 	}
 
-	log.Infow("YouZan order fetched successfully", "jobID", job.JobID)
-	return nil
-}
+	// Build fetch request from job metadata
+	req := buildOrderRequest(job)
 
-// ValidateOrder handles the order validation logic.
-func (w *Watcher) ValidateOrder(ctx context.Context, job *model.JobM) error {
-	w.Limiter.Validate.Take()
-	log.Infow("Validating YouZan order", "jobID", job.JobID)
-
-	// Simulate validation process
-	time.Sleep(1 * time.Second)
-
-	// Update job progress
-	if err := w.updateJobProgress(ctx, job.ID, 50); err != nil {
-		return fmt.Errorf("failed to update job progress: %w", err)
-	}
-
-	log.Infow("YouZan order validated successfully", "jobID", job.JobID)
-	return nil
-}
-
-// EnrichOrder handles the order enrichment logic.
-func (w *Watcher) EnrichOrder(ctx context.Context, job *model.JobM) error {
-	w.Limiter.Enrich.Take()
-	log.Infow("Enriching YouZan order", "jobID", job.JobID)
-
-	// Simulate enrichment process
-	time.Sleep(3 * time.Second)
-
-	// Update job progress
-	if err := w.updateJobProgress(ctx, job.ID, 75); err != nil {
-		return fmt.Errorf("failed to update job progress: %w", err)
-	}
-
-	log.Infow("YouZan order enriched successfully", "jobID", job.JobID)
-	return nil
-}
-
-// ProcessOrder handles the order processing logic.
-func (w *Watcher) ProcessOrder(ctx context.Context, job *model.JobM) error {
-	w.Limiter.Process.Take()
-	log.Infow("Processing YouZan order", "jobID", job.JobID)
-
-	// Simulate processing
-	time.Sleep(2 * time.Second)
-
-	// Update job progress to completion
-	if err := w.updateJobProgress(ctx, job.ID, 100); err != nil {
-		return fmt.Errorf("failed to update job progress: %w", err)
-	}
-
-	log.Infow("YouZan order processed successfully", "jobID", job.JobID)
-	return nil
-}
-
-// updateJobProgress updates the job progress in the database.
-func (w *Watcher) updateJobProgress(ctx context.Context, jobID int64, progress float64) error {
-	jobObj, err := w.Store.Job().Get(ctx, where.F("id", jobID))
+	// Fetch orders from YouZan API
+	response, err := w.youZanClient.FetchOrders(ctx, req)
 	if err != nil {
-		return fmt.Errorf("failed to get job %d: %w", jobID, err)
+		log.Errorw("Failed to fetch orders from YouZan API", "jobID", job.JobID, "error", err)
+		return err
 	}
 
-	// Update progress (assuming there's a progress field in JobM)
-	// Note: This might need adjustment based on the actual JobM structure
-	jobObj.UpdatedAt = time.Now()
-
-	if err := w.Store.Job().Update(ctx, jobObj); err != nil {
-		return fmt.Errorf("failed to update job %d progress: %w", jobID, err)
+	if !response.Success {
+		return fmt.Errorf("YouZan API returned error: %s", response.Message)
 	}
 
-	log.Infow("Updated job progress", "jobID", jobID, "progress", progress)
+	// Store fetched orders in job metadata
+	if job.Metadata == nil {
+		job.Metadata = make(map[string]interface{})
+	}
+	job.Metadata["fetched_orders"] = response.Data.Orders
+	job.Metadata["total_orders"] = response.Data.TotalCount
+	job.Metadata["fetch_time"] = time.Now().Format(time.RFC3339)
+
+	// Update job progress
+	if err := updateJobProgress(ctx, w.Store, job); err != nil {
+		log.Warnw("Failed to update job progress", "jobID", job.JobID, "error", err)
+	}
+
+	log.Infow("Successfully fetched YouZan orders", "jobID", job.JobID, "count", len(response.Data.Orders))
+	return nil
+}
+
+func (w *Watcher) ValidateOrder(ctx context.Context, job *model.JobM) error {
+	w.takeValidateLimit()
+	log.Infow("Validating YouZan orders", "jobID", job.JobID)
+
+	// Get orders from job metadata
+	ordersData, ok := job.Metadata["fetched_orders"]
+	if !ok {
+		return fmt.Errorf("no orders found in job metadata")
+	}
+
+	// Convert to YouZanOrder slice
+	orders, ok := ordersData.([]*YouZanOrder)
+	if !ok {
+		return fmt.Errorf("invalid orders data format")
+	}
+
+	validOrders := make([]*YouZanOrder, 0)
+	invalidOrders := make([]*YouZanOrder, 0)
+
+	// Validate each order
+	for _, order := range orders {
+		if err := w.youZanClient.ValidateOrder(ctx, order); err != nil {
+			log.Warnw("Order validation failed", "jobID", job.JobID, "orderID", order.OrderID, "error", err)
+			invalidOrders = append(invalidOrders, order)
+		} else {
+			validOrders = append(validOrders, order)
+		}
+	}
+
+	// Update job metadata with validation results
+	job.Metadata["valid_orders"] = validOrders
+	job.Metadata["invalid_orders"] = invalidOrders
+	job.Metadata["valid_count"] = len(validOrders)
+	job.Metadata["invalid_count"] = len(invalidOrders)
+	job.Metadata["validate_time"] = time.Now().Format(time.RFC3339)
+
+	// Update job progress
+	if err := updateJobProgress(ctx, w.Store, job); err != nil {
+		log.Warnw("Failed to update job progress", "jobID", job.JobID, "error", err)
+	}
+
+	log.Infow("Order validation completed", "jobID", job.JobID, "valid", len(validOrders), "invalid", len(invalidOrders))
+	return nil
+}
+
+func (w *Watcher) EnrichOrder(ctx context.Context, job *model.JobM) error {
+	w.takeEnrichLimit()
+	log.Infow("Enriching YouZan orders", "jobID", job.JobID)
+
+	// Get valid orders from job metadata
+	ordersData, ok := job.Metadata["valid_orders"]
+	if !ok {
+		return fmt.Errorf("no valid orders found in job metadata")
+	}
+
+	orders, ok := ordersData.([]*YouZanOrder)
+	if !ok {
+		return fmt.Errorf("invalid orders data format")
+	}
+
+	enrichedOrders := make([]*YouZanOrder, 0)
+
+	// Enrich each order
+	for _, order := range orders {
+		if err := w.youZanClient.EnrichOrder(ctx, order); err != nil {
+			log.Warnw("Order enrichment failed", "jobID", job.JobID, "orderID", order.OrderID, "error", err)
+			continue
+		}
+		enrichedOrders = append(enrichedOrders, order)
+	}
+
+	// Update job metadata with enriched orders
+	job.Metadata["enriched_orders"] = enrichedOrders
+	job.Metadata["enriched_count"] = len(enrichedOrders)
+	job.Metadata["enrich_time"] = time.Now().Format(time.RFC3339)
+
+	// Update job progress
+	if err := updateJobProgress(ctx, w.Store, job); err != nil {
+		log.Warnw("Failed to update job progress", "jobID", job.JobID, "error", err)
+	}
+
+	log.Infow("Order enrichment completed", "jobID", job.JobID, "enriched", len(enrichedOrders))
+	return nil
+}
+
+func (w *Watcher) ProcessOrder(ctx context.Context, job *model.JobM) error {
+	w.takeProcessLimit()
+	log.Infow("Processing YouZan orders", "jobID", job.JobID)
+
+	// Get enriched orders from job metadata
+	ordersData, ok := job.Metadata["enriched_orders"]
+	if !ok {
+		return fmt.Errorf("no enriched orders found in job metadata")
+	}
+
+	orders, ok := ordersData.([]*YouZanOrder)
+	if !ok {
+		return fmt.Errorf("invalid orders data format")
+	}
+
+	processedOrders := make([]*YouZanOrder, 0)
+
+	// Process each order
+	for _, order := range orders {
+		// Convert to batch format
+		orderBatch := w.youZanClient.ConvertToOrderBatch(job, order)
+
+		// Process the order
+		if err := w.youZanClient.ProcessOrder(ctx, order); err != nil {
+			log.Warnw("Order processing failed", "jobID", job.JobID, "orderID", order.OrderID, "error", err)
+			orderBatch.RecordError(err)
+			continue
+		}
+
+		processedOrders = append(processedOrders, order)
+		orderBatch.MarkCompleted()
+
+		// TODO: Save batch data to persistent storage if needed
+		log.Infow("Order batch processed", "jobID", job.JobID, "orderID", order.OrderID, "duration", orderBatch.GetDuration())
+	}
+
+	// Update job metadata with processing results
+	job.Metadata["processed_orders"] = processedOrders
+	job.Metadata["processed_count"] = len(processedOrders)
+	job.Metadata["process_time"] = time.Now().Format(time.RFC3339)
+
+	// Update job progress
+	if err := updateJobProgress(ctx, w.Store, job); err != nil {
+		log.Warnw("Failed to update job progress", "jobID", job.JobID, "error", err)
+	}
+
+	log.Infow("Order processing completed", "jobID", job.JobID, "processed", len(processedOrders))
 	return nil
 }
 
 func init() {
-	registry.Register(known.YouZanOrderWatcher, &Watcher{})
+	registry.Register(known.YouZanOrderWatcher, &Watcher{
+		MaxWorkers: known.YouZanOrderMaxWorkers,
+	})
 }

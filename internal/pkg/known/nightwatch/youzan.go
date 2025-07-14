@@ -71,3 +71,10 @@ const (
 	// YouZanOrderRetryLimit defines the maximum number of retries for failed order processing.
 	YouZanOrderRetryLimit = 3
 )
+
+// YouZan watcher scheduling
+const (
+	// YouZanOrderWatcherSpec defines the cron specification for YouZan order watcher.
+	// Runs every 5 minutes to check for new orders to process.
+	YouZanOrderWatcherSpec = "0 */5 * * * *"
+)
