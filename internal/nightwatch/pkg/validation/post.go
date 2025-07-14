@@ -11,7 +11,6 @@ import (
 
 	validation "github.com/go-ozzo/ozzo-validation/v4"
 	"github.com/go-ozzo/ozzo-validation/v4/is"
-	"github.com/go-playground/validator/v10"
 	genericvalidation "github.com/onexstack/onexstack/pkg/validation"
 
 	"github.com/ashwinyue/dcp/internal/pkg/errno"
@@ -69,57 +68,4 @@ func (v *Validator) ValidateListPostRequest(ctx context.Context, rq *apiv1.ListP
 		return errno.ErrInvalidArgument.WithMessage(err.Error())
 	}
 	return genericvalidation.ValidateSelectedFields(rq, v.ValidatePostRules(), "Offset", "Limit")
-}
-
-// ValidateCreatePostRequest 验证创建帖子请求（新版本）.
-func ValidateCreatePostRequest(sl validator.StructLevel) {
-	rq := sl.Current().Interface().(apiv1.CreatePostRequest)
-
-	if rq.GetTitle() == "" {
-		sl.ReportError(rq.Title, "title", "Title", "required", "")
-	}
-
-	if rq.GetContent() == "" {
-		sl.ReportError(rq.Content, "content", "Content", "required", "")
-	}
-}
-
-// ValidateUpdatePostRequest 验证更新帖子请求（新版本）.
-func ValidateUpdatePostRequest(sl validator.StructLevel) {
-	rq := sl.Current().Interface().(apiv1.UpdatePostRequest)
-
-	if rq.GetPostID() == "" {
-		sl.ReportError(rq.PostID, "postID", "PostID", "required", "")
-	}
-}
-
-// ValidateDeletePostRequest 验证删除帖子请求（新版本）.
-func ValidateDeletePostRequest(sl validator.StructLevel) {
-	rq := sl.Current().Interface().(apiv1.DeletePostRequest)
-
-	if len(rq.GetPostIDs()) == 0 {
-		sl.ReportError(rq.PostIDs, "postIDs", "PostIDs", "required", "")
-	}
-}
-
-// ValidateGetPostRequest 验证获取帖子请求（新版本）.
-func ValidateGetPostRequest(sl validator.StructLevel) {
-	rq := sl.Current().Interface().(apiv1.GetPostRequest)
-
-	if rq.GetPostID() == "" {
-		sl.ReportError(rq.PostID, "postID", "PostID", "required", "")
-	}
-}
-
-// ValidateListPostRequest 验证列表帖子请求（新版本）.
-func ValidateListPostRequest(sl validator.StructLevel) {
-	rq := sl.Current().Interface().(apiv1.ListPostRequest)
-
-	if rq.GetLimit() <= 0 {
-		sl.ReportError(rq.Limit, "limit", "Limit", "min", "1")
-	}
-
-	if rq.GetLimit() > 1000 {
-		sl.ReportError(rq.Limit, "limit", "Limit", "max", "1000")
-	}
 }

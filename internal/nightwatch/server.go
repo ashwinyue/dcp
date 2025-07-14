@@ -13,25 +13,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/onexstack/onexstack/pkg/authz"
 	genericoptions "github.com/onexstack/onexstack/pkg/options"
-	"github.com/onexstack/onexstack/pkg/store/where"
-	"github.com/onexstack/onexstack/pkg/token"
 	"github.com/onexstack/onexstack/pkg/watch"
 	"github.com/onexstack/onexstack/pkg/watch/logger/onex"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"github.com/ashwinyue/dcp/internal/apiserver/model"
+	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	"github.com/ashwinyue/dcp/internal/nightwatch/biz"
 	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/validation"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/nightwatch/watcher"
 	_ "github.com/ashwinyue/dcp/internal/nightwatch/watcher/all"
-	"github.com/ashwinyue/dcp/internal/pkg/contextx"
-	"github.com/ashwinyue/dcp/internal/pkg/known"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
-	mw "github.com/ashwinyue/dcp/internal/pkg/middleware/gin"
 	"github.com/ashwinyue/dcp/internal/pkg/server"
 )
 
@@ -53,8 +47,6 @@ const (
 // 不用 viper.Get，是因为这种方式能更加清晰的知道应用提供了哪些配置项.
 type Config struct {
 	ServerMode        string
-	JWTKey            string
-	Expiration        time.Duration
 	EnableMemoryStore bool
 	TLSOptions        *genericoptions.TLSOptions
 	HTTPOptions       *genericoptions.HTTPOptions
@@ -88,20 +80,10 @@ type ServerConfig struct {
 	cfg       *Config
 	biz       biz.IBiz
 	val       *validation.Validator
-	retriever mw.UserRetriever
-	authz     *authz.Authz
 }
 
 // NewUnionServer 根据配置创建联合服务器.
 func (cfg *Config) NewUnionServer() (*UnionServer, error) {
-	// 注册租户解析函数，通过上下文获取用户 ID
-	//nolint: gocritic
-	where.RegisterTenant("userID", func(ctx context.Context) string {
-		return contextx.UserID(ctx)
-	})
-
-	// 初始化 token 包的签名密钥、认证 Key 及 Token 默认过期时间
-	token.Init(cfg.JWTKey, known.XUserID, cfg.Expiration)
 
 	log.Infow("Initializing federation server", "server-mode", cfg.ServerMode, "enable-memory-store", cfg.EnableMemoryStore, "enable-watcher", cfg.EnableWatcher)
 
@@ -198,41 +180,53 @@ func (s *UnionServer) Run() error {
 
 // NewDB 创建一个 *gorm.DB 实例.
 func (cfg *Config) NewDB() (*gorm.DB, error) {
+	var db *gorm.DB
+	var err error
+
 	if !cfg.EnableMemoryStore {
 		log.Infow("Initializing database connection", "type", "mysql", "addr", cfg.MySQLOptions.Addr)
-		return cfg.MySQLOptions.NewDB()
+		db, err = cfg.MySQLOptions.NewDB()
+	} else {
+		log.Infow("Initializing database connection", "type", "memory", "engine", "SQLite")
+		// 使用SQLite内存模式配置数据库
+		// ?cache=shared 用于设置 SQLite 的缓存模式为 共享缓存模式 (shared)。
+		// 默认情况下，SQLite 的每个数据库连接拥有自己的独立缓存，这种模式称为 专用缓存 (private)。
+		// 使用 共享缓存模式 (shared) 后，不同连接可以共享同一个内存中的数据库和缓存。
+		db, err = gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	}
 
-	log.Infow("Initializing database connection", "type", "memory", "engine", "SQLite")
-	// 使用SQLite内存模式配置数据库
-	// ?cache=shared 用于设置 SQLite 的缓存模式为 共享缓存模式 (shared)。
-	// 默认情况下，SQLite 的每个数据库连接拥有自己的独立缓存，这种模式称为 专用缓存 (private)。
-	// 使用 共享缓存模式 (shared) 后，不同连接可以共享同一个内存中的数据库和缓存。
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {
 		log.Errorw("Failed to create database connection", "err", err)
 		return nil, err
 	}
 
+	// 自动迁移数据库表结构
+	log.Infow("Auto-migrating database tables")
+	if cfg.EnableMemoryStore {
+		// 使用SQLite兼容的模型
+		err = db.AutoMigrate(
+			&model.CronJobSQLite{},
+			&model.JobSQLite{},
+		)
+	} else {
+		// 使用MySQL模型，只迁移nightwatch自己的表
+		err = db.AutoMigrate(
+			&model.CronJobM{},
+			&model.JobM{},
+			// 暂时移除PostM，避免与现有表结构冲突
+			// &model.PostM{},
+		)
+	}
+	if err != nil {
+		log.Errorw("Failed to auto-migrate database tables", "err", err)
+		return nil, err
+	}
+	log.Infow("Database tables auto-migration completed successfully")
+
 	return db, nil
 }
 
-// UserRetriever 定义一个用户数据获取器. 用来获取用户信息.
-type UserRetriever struct {
-	store store.IStore
-}
 
-// GetUser 实现 middleware.UserRetriever 接口.
-// 由于 nightwatch 服务不涉及用户管理，这里返回一个空的用户信息.
-func (ur *UserRetriever) GetUser(ctx context.Context, userID string) (*model.UserM, error) {
-	// nightwatch 服务不需要用户信息，返回一个基本的用户结构
-	return &model.UserM{
-		UserID:   userID,
-		Username: "nightwatch-user",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}, nil
-}
 
 // ProvideDB 根据配置提供一个数据库实例。
 func ProvideDB(cfg *Config) (*gorm.DB, error) {

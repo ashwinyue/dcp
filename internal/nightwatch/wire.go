@@ -11,12 +11,10 @@ package nightwatch
 
 import (
 	"github.com/google/wire"
-	"github.com/onexstack/onexstack/pkg/authz"
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/biz"
 	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/validation"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
-	ginmw "github.com/ashwinyue/dcp/internal/pkg/middleware/gin"
 	"github.com/ashwinyue/dcp/internal/pkg/server"
 )
 
@@ -27,11 +25,6 @@ func InitializeWebServer(*Config) (server.Server, error) {
 		wire.NewSet(store.ProviderSet, biz.ProviderSet),
 		ProvideDB, // 提供数据库实例
 		validation.ProviderSet,
-		wire.NewSet(
-			wire.Struct(new(UserRetriever), "*"),
-			wire.Bind(new(ginmw.UserRetriever), new(*UserRetriever)),
-		),
-		authz.ProviderSet,
 	)
 	return nil, nil
 }

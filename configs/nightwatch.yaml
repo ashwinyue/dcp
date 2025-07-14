@@ -17,15 +17,12 @@
 #   - 学习 Gin 框架时选择 gin
 server-mode: grpc-gateway
 
-# JWT 签发密钥
-jwt-key: Rtg8BPKNEf2mB4mgvKONGPZZQSaJWNLijxR42qRgq0iBb5
-
-# JWT Token 过期时间
-expiration: 2h
+# JWT 配置已移除 - nightwatch 服务不再需要认证
 
 # 指示是否启用内存数据库（用于测试或开发环境）.
 # 如果设置为 true 则忽略 mysql 配置.
-enable-memory-store: true
+# 设置为 false 以使用 MySQL 数据库
+enable-memory-store: false
 
 # 是否启用watcher服务进行任务监控和处理
 enable-watcher: true
@@ -37,7 +34,8 @@ user-watcher-max-workers: 10
 tls:
   # 是否启动 HTTPS 安全服务器
   # 生产环境建议开启 HTTPS。并使用 HTTPS 协议访问 API 接口
-  use-tls: true
+  # 开发环境可以设置为 false 使用 HTTP
+  use-tls: false
   # 证书
   cert: /opt/nightwatch/etc/cert/server.crt
   # 证书 Key 文件
@@ -46,23 +44,23 @@ tls:
 # HTTP 服务器相关配置
 http:
   # HTTP 服务器监听地址
-  addr: :7777
+  addr: :7771
 
 # GRPC 服务器相关配置
 grpc:
   # GRPC 服务器监听地址
-  addr: :8888
+  addr: :8885
 
 # MySQL 数据库相关配置
 mysql:
   # MySQL 机器 IP 和端口，默认 127.0.0.1:3306
-  addr: 127.0.0.1
+  addr: 127.0.0.1:3306
   # MySQL 用户名(建议授权最小权限集)
-  username: nightwatch
+  username: miniblog
   # MySQL 用户密码
-  password: nightwatch1234
+  password: miniblog1234
   # nightwatch 系统所用的数据库名
-  database: nightwatch
+  database: miniblog
   # MySQL 最大空闲连接数，默认 100
   max-idle-connections: 100
   # MySQL 最大打开的连接数，默认 100
@@ -117,4 +115,4 @@ log:
   # 生产环境建议设置为 json
   format: json
   # 指定日志输出位置，多个输出，用 `逗号 + 空格` 分开。stdout：标准输出
-  output-paths: [stdout, /opt/nightwatch/log/nightwatch.log]
+  output-paths: [stdout]

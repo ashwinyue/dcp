@@ -10,7 +10,6 @@ package biz
 
 import (
 	"github.com/google/wire"
-	"github.com/onexstack/onexstack/pkg/authz"
 
 	cronjobv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/cronjob"
 	jobv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/job"
@@ -42,15 +41,14 @@ type IBiz interface {
 // biz 是 IBiz 的一个具体实现.
 type biz struct {
 	store store.IStore
-	authz *authz.Authz
 }
 
 // 确保 biz 实现了 IBiz 接口.
 var _ IBiz = (*biz)(nil)
 
 // NewBiz 创建一个 IBiz 类型的实例.
-func NewBiz(store store.IStore, authz *authz.Authz) *biz {
-	return &biz{store: store, authz: authz}
+func NewBiz(store store.IStore) *biz {
+	return &biz{store: store}
 }
 
 // CronJobV1 返回一个实现了 CronJobBiz 接口的实例.

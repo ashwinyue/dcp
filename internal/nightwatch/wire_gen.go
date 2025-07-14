@@ -11,7 +11,10 @@ import (
 	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/validation"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/pkg/server"
-	"github.com/onexstack/onexstack/pkg/authz"
+)
+
+import (
+	_ "github.com/ashwinyue/dcp/internal/nightwatch/watcher/all"
 )
 
 // Injectors from wire.go:
@@ -23,22 +26,12 @@ func InitializeWebServer(config *Config) (server.Server, error) {
 		return nil, err
 	}
 	datastore := store.NewStore(db)
-	v := authz.DefaultOptions()
-	authzAuthz, err := authz.NewAuthz(db, v...)
-	if err != nil {
-		return nil, err
-	}
-	bizBiz := biz.NewBiz(datastore, authzAuthz)
+	bizBiz := biz.NewBiz(datastore)
 	validator := validation.New(datastore)
-	userRetriever := &UserRetriever{
-		store: datastore,
-	}
 	serverConfig := &ServerConfig{
-		cfg:       config,
-		biz:       bizBiz,
-		val:       validator,
-		retriever: userRetriever,
-		authz:     authzAuthz,
+		cfg: config,
+		biz: bizBiz,
+		val: validator,
 	}
 	serverServer, err := NewWebServer(string2, serverConfig)
 	if err != nil {

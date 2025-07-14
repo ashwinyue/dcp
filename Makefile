@@ -34,6 +34,14 @@ export USAGE_OPTIONS
 build: go.tidy  ## 编译源码，依赖 tidy 目标自动添加/移除依赖包.
 	@$(MAKE) go.build
 
+build.nightwatch: go.tidy ## 编译 nightwatch 服务.
+	@echo "===========> Building nightwatch binary"
+	@go build -o bin/nightwatch ./cmd/nightwatch
+
+build.apiserver: go.tidy ## 编译 apiserver 服务.
+	@echo "===========> Building apiserver binary"
+	@go build -o bin/mb-apiserver ./cmd/mb-apiserver
+
 ## --------------------------------------
 ## Testing
 ## --------------------------------------
@@ -85,6 +93,42 @@ protoc: ## 编译 protobuf 文件.
 	@$(MAKE) gen.protoc
 
 ## --------------------------------------
+## Services
+## --------------------------------------
+
+##@ services:
+
+run.nightwatch: ## 运行 nightwatch 服务.
+	@echo "===========> Starting nightwatch service"
+	@go run ./cmd/nightwatch --config=configs/nightwatch.yaml
+
+run.apiserver: ## 运行 apiserver 服务.
+	@echo "===========> Starting apiserver service"
+	@go run ./cmd/mb-apiserver --config=configs/mb-apiserver.yaml
+
+stop.nightwatch: ## 停止 nightwatch 服务.
+	@echo "===========> Stopping nightwatch service"
+	@pkill -f "go run ./cmd/nightwatch" || true
+
+stop.apiserver: ## 停止 apiserver 服务.
+	@echo "===========> Stopping apiserver service"
+	@pkill -f "go run ./cmd/mb-apiserver" || true
+
+restart.nightwatch: stop.nightwatch run.nightwatch ## 重启 nightwatch 服务.
+
+restart.apiserver: stop.apiserver run.apiserver ## 重启 apiserver 服务.
+
+wire.nightwatch: ## 生成 nightwatch 的 wire 依赖注入代码.
+	@echo "===========> Generating wire code for nightwatch"
+	@cd internal/nightwatch && go generate
+
+wire.apiserver: ## 生成 apiserver 的 wire 依赖注入代码.
+	@echo "===========> Generating wire code for apiserver"
+	@cd internal/apiserver && go generate
+
+wire: wire.nightwatch wire.apiserver ## 生成所有服务的 wire 依赖注入代码.
+
+## --------------------------------------
 ## Hack / Tools
 ## --------------------------------------
 
@@ -104,4 +148,6 @@ help: Makefile ## 打印 Makefile help 信息.
 	@echo -e "$$USAGE_OPTIONS"
 
 # 伪目标（防止文件与目标名称冲突）
-.PHONY: all build test cover clean lint tidy format ca protoc swagger serve-swagger add-copyright help
+.PHONY: all build test cover clean lint tidy format ca protoc swagger serve-swagger add-copyright help \
+	build.nightwatch build.apiserver run.nightwatch run.apiserver stop.nightwatch stop.apiserver \
+	restart.nightwatch restart.apiserver wire.nightwatch wire.apiserver wire

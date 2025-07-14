@@ -15,7 +15,6 @@ import (
 
 	handler "github.com/ashwinyue/dcp/internal/nightwatch/handler/http"
 	"github.com/ashwinyue/dcp/internal/pkg/errno"
-	mw "github.com/ashwinyue/dcp/internal/pkg/middleware/gin"
 	"github.com/ashwinyue/dcp/internal/pkg/server"
 )
 
@@ -33,7 +32,7 @@ func (c *ServerConfig) NewGinServer() server.Server {
 	engine := gin.New()
 
 	// 注册全局中间件，用于恢复 panic、设置 HTTP 头、添加请求 ID 等
-	engine.Use(gin.Recovery(), mw.NoCache, mw.Cors, mw.Secure, mw.RequestIDMiddleware())
+	engine.Use(gin.Recovery())
 
 	// 注册 REST API 路由
 	c.InstallRESTAPI(engine)
@@ -54,14 +53,11 @@ func (c *ServerConfig) InstallRESTAPI(engine *gin.Engine) {
 	// 注册健康检查接口
 	engine.GET("/healthz", handler.Healthz)
 
-	// 认证和授权中间件
-	authMiddlewares := []gin.HandlerFunc{mw.AuthnMiddleware(c.retriever), mw.AuthzMiddleware(c.authz)}
-
 	// 注册 v1 版本 API 路由分组
 	v1 := engine.Group("/v1")
 	{
 		// 博客相关路由
-		postv1 := v1.Group("/posts", authMiddlewares...) // 所有博客相关接口都需要认证和授权
+		postv1 := v1.Group("/posts")
 		{
 			postv1.POST("", handler.CreatePost)       // 创建博客
 			postv1.PUT(":postID", handler.UpdatePost) // 更新博客
@@ -71,7 +67,7 @@ func (c *ServerConfig) InstallRESTAPI(engine *gin.Engine) {
 		}
 
 		// CronJob相关路由
-		cronjobv1 := v1.Group("/cronjobs", authMiddlewares...) // 所有CronJob相关接口都需要认证和授权
+		cronjobv1 := v1.Group("/cronjobs")
 		{
 			cronjobv1.POST("", handler.CreateCronJob)             // 创建CronJob
 			cronjobv1.PUT(":cronjobID", handler.UpdateCronJob)    // 更新CronJob
@@ -81,7 +77,7 @@ func (c *ServerConfig) InstallRESTAPI(engine *gin.Engine) {
 		}
 
 		// Job相关路由
-		jobv1 := v1.Group("/jobs", authMiddlewares...) // 所有Job相关接口都需要认证和授权
+		jobv1 := v1.Group("/jobs")
 		{
 			jobv1.POST("", handler.CreateJob)       // 创建Job
 			jobv1.PUT(":jobID", handler.UpdateJob)  // 更新Job
