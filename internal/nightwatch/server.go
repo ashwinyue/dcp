@@ -19,8 +19,8 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	"github.com/ashwinyue/dcp/internal/nightwatch/biz"
+	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/validation"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/nightwatch/watcher"
@@ -41,8 +41,6 @@ const (
 	GinServerMode = "gin"
 )
 
-
-
 // Config 配置结构体，用于存储应用相关的配置.
 // 不用 viper.Get，是因为这种方式能更加清晰的知道应用提供了哪些配置项.
 type Config struct {
@@ -53,8 +51,8 @@ type Config struct {
 	GRPCOptions       *genericoptions.GRPCOptions
 	MySQLOptions      *genericoptions.MySQLOptions
 	// Watcher related configurations
-	WatchOptions      *watch.Options
-	EnableWatcher     bool
+	WatchOptions          *watch.Options
+	EnableWatcher         bool
 	UserWatcherMaxWorkers int64
 }
 
@@ -69,17 +67,17 @@ type Config struct {
 //
 // HTTP 反向代理服务器依赖 gRPC 服务器，所以在开启 HTTP 反向代理服务器时，会先启动 gRPC 服务器.
 type UnionServer struct {
-	srv     server.Server
-	watch   *watch.Watch
-	db      *gorm.DB
-	config  *Config
+	srv    server.Server
+	watch  *watch.Watch
+	db     *gorm.DB
+	config *Config
 }
 
 // ServerConfig 包含服务器的核心依赖和配置.
 type ServerConfig struct {
-	cfg       *Config
-	biz       biz.IBiz
-	val       *validation.Validator
+	cfg *Config
+	biz biz.IBiz
+	val *validation.Validator
 }
 
 // NewUnionServer 根据配置创建联合服务器.
@@ -225,8 +223,6 @@ func (cfg *Config) NewDB() (*gorm.DB, error) {
 
 	return db, nil
 }
-
-
 
 // ProvideDB 根据配置提供一个数据库实例。
 func ProvideDB(cfg *Config) (*gorm.DB, error) {

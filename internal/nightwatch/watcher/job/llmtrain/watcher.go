@@ -8,8 +8,8 @@ import (
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
-	"github.com/ashwinyue/dcp/internal/pkg/log"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
+	"github.com/ashwinyue/dcp/internal/pkg/log"
 )
 
 // Watcher is responsible for monitoring and processing daily estimation jobs.

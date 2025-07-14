@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ashwinyue/dcp/internal/pkg/log"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
+	"github.com/ashwinyue/dcp/internal/pkg/log"
 )
 
 // Download handles the download event for LLM training jobs.

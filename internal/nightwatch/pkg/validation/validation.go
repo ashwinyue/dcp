@@ -26,11 +26,11 @@ type Validator struct {
 
 // 使用预编译的全局正则表达式，避免重复创建和编译.
 var (
-	lengthRegex    = regexp.MustCompile(`^.{3,50}$`)                                         // 长度在 3 到 50 个字符之间
-	validRegex     = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)                                  // 仅包含字母、数字、下划线和连字符
+	lengthRegex    = regexp.MustCompile(`^.{3,50}$`)                                             // 长度在 3 到 50 个字符之间
+	validRegex     = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)                                      // 仅包含字母、数字、下划线和连字符
 	cronRegex      = regexp.MustCompile(`^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`) // Quartz Cron 表达式格式
-	watcherRegex   = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)                                 // Watcher 名称格式
-	descriptionLen = regexp.MustCompile(`^.{0,500}$`)                                        // 描述长度限制
+	watcherRegex   = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)                                     // Watcher 名称格式
+	descriptionLen = regexp.MustCompile(`^.{0,500}$`)                                            // 描述长度限制
 )
 
 // ProviderSet 是一个 Wire 的 Provider 集合，用于声明依赖注入的规则.
