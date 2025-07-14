@@ -15,10 +15,16 @@ const defaultABC = "abcdefghijklmnopqrstuvwxyz1234567890"
 type ResourceID string
 
 const (
-	// UserID 定义用户资源标识符.
-	UserID ResourceID = "user"
 	// PostID 定义博文资源标识符.
 	PostID ResourceID = "post"
+	// ID for the user resource in onex-usercenter.
+	User ResourceID = "user"
+	// ID for the order resource in onex-fakeserver.
+	Order ResourceID = "order"
+	// ID for the cronjob resource in onex-nightwatch.
+	CronJob ResourceID = "cronjob"
+	// ID for the job resource in onex-nightwatch.
+	Job ResourceID = "job"
 )
 
 // String 将资源标识符转换为字符串.

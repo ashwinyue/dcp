@@ -1,0 +1,1114 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "nightwatch API",
+    "description": "Nightwatch 任务调度和作业管理系统",
+    "version": "1.0",
+    "contact": {
+      "name": "Nightwatch 任务调度系统",
+      "url": "https://github.com/ashwinyue/dcp",
+      "email": "colin404@foxmail.com"
+    },
+    "license": {
+      "name": "MIT License",
+      "url": "https://github.com/ashwinyue/dcp/blob/master/LICENSE"
+    }
+  },
+  "tags": [
+    {
+      "name": "Nightwatch"
+    }
+  ],
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/v1/cronjobs": {
+      "get": {
+        "summary": "列出所有定时任务",
+        "operationId": "ListCronJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ListCronJobResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "offset",
+            "description": "@gotags: form:\"offset\"",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "limit",
+            "description": "@gotags: form:\"limit\"",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          }
+        ],
+        "tags": [
+          "定时任务管理"
+        ]
+      },
+      "delete": {
+        "summary": "删除定时任务",
+        "operationId": "DeleteCronJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1DeleteCronJobResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1DeleteCronJobRequest"
+            }
+          }
+        ],
+        "tags": [
+          "定时任务管理"
+        ]
+      },
+      "post": {
+        "summary": "创建定时任务",
+        "operationId": "CreateCronJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1CreateCronJobResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1CreateCronJobRequest"
+            }
+          }
+        ],
+        "tags": [
+          "定时任务管理"
+        ]
+      }
+    },
+    "/v1/cronjobs/{cronJobID}": {
+      "get": {
+        "summary": "获取定时任务信息",
+        "operationId": "GetCronJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1GetCronJobResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "cronJobID",
+            "description": "@gotags: uri:\"cronJobID\"",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "定时任务管理"
+        ]
+      },
+      "put": {
+        "summary": "更新定时任务",
+        "operationId": "UpdateCronJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1UpdateCronJobResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "cronJobID",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NightwatchUpdateCronJobBody"
+            }
+          }
+        ],
+        "tags": [
+          "定时任务管理"
+        ]
+      }
+    },
+    "/v1/jobs": {
+      "get": {
+        "summary": "列出所有作业",
+        "operationId": "ListJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ListJobResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "offset",
+            "description": "@gotags: form:\"offset\"",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "limit",
+            "description": "@gotags: form:\"limit\"",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          }
+        ],
+        "tags": [
+          "作业管理"
+        ]
+      },
+      "delete": {
+        "summary": "删除作业",
+        "operationId": "DeleteJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1DeleteJobResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1DeleteJobRequest"
+            }
+          }
+        ],
+        "tags": [
+          "作业管理"
+        ]
+      },
+      "post": {
+        "summary": "创建作业",
+        "operationId": "CreateJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1CreateJobResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1CreateJobRequest"
+            }
+          }
+        ],
+        "tags": [
+          "作业管理"
+        ]
+      }
+    },
+    "/v1/jobs/{jobID}": {
+      "get": {
+        "summary": "获取作业信息",
+        "operationId": "GetJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1GetJobResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobID",
+            "description": "@gotags: uri:\"jobID\"",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "作业管理"
+        ]
+      },
+      "put": {
+        "summary": "更新作业",
+        "operationId": "UpdateJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1UpdateJobResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NightwatchUpdateJobBody"
+            }
+          }
+        ],
+        "tags": [
+          "作业管理"
+        ]
+      }
+    },
+    "/v1/posts": {
+      "get": {
+        "summary": "列出所有文章",
+        "operationId": "ListPost",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/nightwatchv1ListPostResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "offset",
+            "description": "offset 表示偏移量\n@gotags: form:\"offset\"",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "int64"
+          },
+          {
+            "name": "limit",
+            "description": "limit 表示每页数量\n@gotags: form:\"limit\"",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "int64"
+          },
+          {
+            "name": "title",
+            "description": "title 表示可选的标题过滤",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "文章管理"
+        ]
+      },
+      "delete": {
+        "summary": "删除文章",
+        "operationId": "DeletePost",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/nightwatchv1DeletePostResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/nightwatchv1DeletePostRequest"
+            }
+          }
+        ],
+        "tags": [
+          "文章管理"
+        ]
+      },
+      "post": {
+        "summary": "创建文章",
+        "operationId": "CreatePost",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/nightwatchv1CreatePostResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/nightwatchv1CreatePostRequest"
+            }
+          }
+        ],
+        "tags": [
+          "文章管理"
+        ]
+      }
+    },
+    "/v1/posts/{postID}": {
+      "get": {
+        "summary": "获取文章信息",
+        "operationId": "GetPost",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/nightwatchv1GetPostResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "postID",
+            "description": "postID 表示要获取的文章 ID\n@gotags: uri:\"postID\"",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "文章管理"
+        ]
+      },
+      "put": {
+        "summary": "更新文章",
+        "operationId": "UpdatePost",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/nightwatchv1UpdatePostResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "postID",
+            "description": "postID 表示要更新的文章 ID，对应 {postID}",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1NightwatchUpdatePostBody"
+            }
+          }
+        ],
+        "tags": [
+          "文章管理"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "NightwatchUpdateCronJobBody": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "schedule": {
+          "type": "string"
+        },
+        "concurrencyPolicy": {
+          "$ref": "#/definitions/v1ConcurrencyPolicy"
+        },
+        "suspend": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "successHistoryLimit": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "failedHistoryLimit": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "NightwatchUpdateJobBody": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/v1JobParams"
+        },
+        "results": {
+          "$ref": "#/definitions/v1JobResults"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "nightwatchv1CreatePostRequest": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "title": "title 表示博客标题"
+        },
+        "content": {
+          "type": "string",
+          "title": "content 表示博客内容"
+        }
+      },
+      "title": "CreatePostRequest 表示创建文章请求"
+    },
+    "nightwatchv1CreatePostResponse": {
+      "type": "object",
+      "properties": {
+        "postID": {
+          "type": "string",
+          "title": "postID 表示创建的文章 ID"
+        }
+      },
+      "title": "CreatePostResponse 表示创建文章响应"
+    },
+    "nightwatchv1DeletePostRequest": {
+      "type": "object",
+      "properties": {
+        "postIDs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "title": "postIDs 表示要删除的文章 ID 列表"
+        }
+      },
+      "title": "DeletePostRequest 表示删除文章请求"
+    },
+    "nightwatchv1DeletePostResponse": {
+      "type": "object",
+      "title": "DeletePostResponse 表示删除文章响应"
+    },
+    "nightwatchv1GetPostResponse": {
+      "type": "object",
+      "properties": {
+        "post": {
+          "$ref": "#/definitions/nightwatchv1Post",
+          "title": "post 表示返回的文章信息"
+        }
+      },
+      "title": "GetPostResponse 表示获取文章响应"
+    },
+    "nightwatchv1ListPostResponse": {
+      "type": "object",
+      "properties": {
+        "totalCount": {
+          "type": "string",
+          "format": "int64",
+          "title": "total_count 表示总文章数"
+        },
+        "posts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/nightwatchv1Post"
+          },
+          "title": "posts 表示文章列表"
+        }
+      },
+      "title": "ListPostResponse 表示获取文章列表响应"
+    },
+    "nightwatchv1Post": {
+      "type": "object",
+      "properties": {
+        "postID": {
+          "type": "string",
+          "title": "postID 表示博文 ID"
+        },
+        "userID": {
+          "type": "string",
+          "title": "userID 表示用户 ID"
+        },
+        "title": {
+          "type": "string",
+          "title": "title 表示博客标题"
+        },
+        "content": {
+          "type": "string",
+          "title": "content 表示博客内容"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "title": "createdAt 表示博客创建时间"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "title": "updatedAt 表示博客最后更新时间"
+        }
+      },
+      "title": "Post 表示博客文章"
+    },
+    "nightwatchv1UpdatePostResponse": {
+      "type": "object",
+      "title": "UpdatePostResponse 表示更新文章响应"
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "v1ConcurrencyPolicy": {
+      "type": "string",
+      "enum": [
+        "ForbidConcurrent",
+        "AllowConcurrent",
+        "ReplaceConcurren"
+      ],
+      "default": "ForbidConcurrent",
+      "description": "- ForbidConcurrent: ForbidConcurrent 禁止并发运行，如果先前的作业尚未完成，则跳过下一个运行。\n - AllowConcurrent: AllowConcurrent 允许 CronJobs 并发运行。\n - ReplaceConcurren: ReplaceConcurrent 取消当前正在运行的作业，并用一个新的作业替代它。",
+      "title": "ConcurrencyPolicy 描述了作业的处理方式。只能指定以下并发策略中的一个。\n如果未指定以下任何策略，则默认策略为 ForbidConcurrent"
+    },
+    "v1CreateCronJobRequest": {
+      "type": "object",
+      "properties": {
+        "cronJob": {
+          "$ref": "#/definitions/v1CronJob"
+        }
+      }
+    },
+    "v1CreateCronJobResponse": {
+      "type": "object",
+      "properties": {
+        "cronJobID": {
+          "type": "string"
+        }
+      }
+    },
+    "v1CreateJobRequest": {
+      "type": "object",
+      "properties": {
+        "job": {
+          "$ref": "#/definitions/v1Job"
+        }
+      }
+    },
+    "v1CreateJobResponse": {
+      "type": "object",
+      "properties": {
+        "jobID": {
+          "type": "string"
+        }
+      }
+    },
+    "v1CronJob": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "title": "CronJob 名称"
+        },
+        "cronJobID": {
+          "type": "string",
+          "title": "CronJob ID"
+        },
+        "userID": {
+          "type": "string",
+          "title": "创建人"
+        },
+        "scope": {
+          "type": "string",
+          "title": "CronJob 作用域"
+        },
+        "description": {
+          "type": "string",
+          "title": "CronJob 描述"
+        },
+        "schedule": {
+          "type": "string",
+          "title": "Quartz 格式的调度时间描述。http://www.quartz-scheduler.org/documentation/quartz-2.3.0/tutorials/tutorial-lesson-06.html"
+        },
+        "status": {
+          "$ref": "#/definitions/v1CronJobStatus",
+          "title": "CronJob 任务状态，例如：{\"active\":[1,2],\"lastScheduleTime\":1234,\"lastSuccessfulTime\":1234, \"lastJobID\": 1234}"
+        },
+        "concurrencyPolicy": {
+          "$ref": "#/definitions/v1ConcurrencyPolicy",
+          "title": "作业处理方式（1 串行，2 并行，3 替换，默认 1）"
+        },
+        "suspend": {
+          "type": "integer",
+          "format": "int32",
+          "title": "是否挂起（1 挂起，0 不挂起, 默认 0）"
+        },
+        "jobTemplate": {
+          "$ref": "#/definitions/v1Job",
+          "title": "Job 模版"
+        },
+        "successHistoryLimit": {
+          "type": "integer",
+          "format": "int32",
+          "title": "要保留的成功完成作业的数量。值必须是非负整数。默认值为 10。"
+        },
+        "failedHistoryLimit": {
+          "type": "integer",
+          "format": "int32",
+          "title": "要保留的失败完成作业的数量。值必须是非负整数。  默认值为 5。"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "title": "创建时间"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "title": "更新时间"
+        }
+      },
+      "title": "CronJob 表示单个 Cron 作业的配置。"
+    },
+    "v1CronJobStatus": {
+      "type": "object",
+      "properties": {
+        "active": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "int64"
+          }
+        },
+        "lastScheduleTime": {
+          "type": "string",
+          "format": "int64"
+        },
+        "lastSuccessfulTime": {
+          "type": "string",
+          "format": "int64"
+        },
+        "lastJobID": {
+          "type": "string"
+        }
+      }
+    },
+    "v1DeleteCronJobRequest": {
+      "type": "object",
+      "properties": {
+        "cronJobIDs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "v1DeleteCronJobResponse": {
+      "type": "object"
+    },
+    "v1DeleteJobRequest": {
+      "type": "object",
+      "properties": {
+        "jobIDs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "v1DeleteJobResponse": {
+      "type": "object"
+    },
+    "v1GetCronJobResponse": {
+      "type": "object",
+      "properties": {
+        "cronJob": {
+          "$ref": "#/definitions/v1CronJob"
+        }
+      }
+    },
+    "v1GetJobResponse": {
+      "type": "object",
+      "properties": {
+        "job": {
+          "$ref": "#/definitions/v1Job"
+        }
+      }
+    },
+    "v1Job": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "title": "Job 名称"
+        },
+        "jobID": {
+          "type": "string",
+          "title": "Job ID"
+        },
+        "userID": {
+          "type": "string",
+          "title": "创建人"
+        },
+        "cronJobID": {
+          "type": "string",
+          "title": "CronJob ID"
+        },
+        "scope": {
+          "type": "string",
+          "title": "Job 作用域"
+        },
+        "description": {
+          "type": "string",
+          "title": "Job 描述"
+        },
+        "watcher": {
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/v1JobParams",
+          "title": "Job 参数"
+        },
+        "results": {
+          "$ref": "#/definitions/v1JobResults",
+          "title": "Job 执行结果"
+        },
+        "status": {
+          "type": "string",
+          "title": "Job 状态：Pending、Running、Succeeded、Failed"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1JobCondition"
+          },
+          "title": "Job 状态：Pending、Running、Succeeded、Failed"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "int64",
+          "title": "Job 开始时间"
+        },
+        "endedAt": {
+          "type": "string",
+          "format": "int64",
+          "title": "Job 结束时间"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "title": "创建时间"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "title": "更新时间"
+        }
+      }
+    },
+    "v1JobCondition": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "title": "Type of the condition (e.g., \"Downloaed\", \"Embedded\", \"Evaluated\")"
+        },
+        "status": {
+          "type": "string",
+          "title": "Status of the condition (True, False, Unknown)"
+        },
+        "message": {
+          "type": "string",
+          "title": "Message provides additional information when the condition is false"
+        },
+        "lastTransitionTime": {
+          "type": "string",
+          "description": "Last time the condition transitioned from one status to another."
+        }
+      }
+    },
+    "v1JobParams": {
+      "type": "object",
+      "properties": {
+        "train": {
+          "$ref": "#/definitions/v1TrainParams"
+        }
+      }
+    },
+    "v1JobResults": {
+      "type": "object",
+      "properties": {
+        "train": {
+          "$ref": "#/definitions/v1TrainResults"
+        }
+      }
+    },
+    "v1ListCronJobResponse": {
+      "type": "object",
+      "properties": {
+        "total": {
+          "type": "string",
+          "format": "int64"
+        },
+        "cronJobs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1CronJob"
+          }
+        }
+      }
+    },
+    "v1ListJobResponse": {
+      "type": "object",
+      "properties": {
+        "total": {
+          "type": "string",
+          "format": "int64"
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Job"
+          }
+        }
+      }
+    },
+    "v1NightwatchUpdatePostBody": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "title": "title 表示更新后的博客标题"
+        },
+        "content": {
+          "type": "string",
+          "title": "content 表示更新后的博客内容"
+        }
+      },
+      "title": "UpdatePostRequest 表示更新文章请求"
+    },
+    "v1TrainParams": {
+      "type": "object",
+      "properties": {
+        "idempotentExecution": {
+          "type": "string",
+          "format": "int64"
+        },
+        "jobTimeout": {
+          "type": "string",
+          "format": "int64"
+        },
+        "batchSize": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "v1TrainResults": {
+      "type": "object",
+      "properties": {
+        "embeddedDataPath": {
+          "type": "string"
+        },
+        "taskID": {
+          "type": "string"
+        },
+        "dataPath": {
+          "type": "string"
+        },
+        "resultPath": {
+          "type": "string"
+        }
+      }
+    },
+    "v1UpdateCronJobResponse": {
+      "type": "object"
+    },
+    "v1UpdateJobResponse": {
+      "type": "object"
+    }
+  }
+}

@@ -289,7 +289,7 @@
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/MiniBlogUpdatePostBody"
+              "$ref": "#/definitions/v1MiniBlogUpdatePostBody"
             }
           }
         ],
@@ -525,20 +525,6 @@
         }
       },
       "title": "ChangePasswordRequest 表示修改密码请求"
-    },
-    "MiniBlogUpdatePostBody": {
-      "type": "object",
-      "properties": {
-        "title": {
-          "type": "string",
-          "title": "title 表示更新后的博客标题"
-        },
-        "content": {
-          "type": "string",
-          "title": "content 表示更新后的博客内容"
-        }
-      },
-      "title": "UpdatePostRequest 表示更新文章请求"
     },
     "MiniBlogUpdateUserBody": {
       "type": "object",
@@ -779,6 +765,20 @@
         }
       },
       "title": "LoginResponse 表示登录响应"
+    },
+    "v1MiniBlogUpdatePostBody": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "title": "title 表示更新后的博客标题"
+        },
+        "content": {
+          "type": "string",
+          "title": "content 表示更新后的博客内容"
+        }
+      },
+      "title": "UpdatePostRequest 表示更新文章请求"
     },
     "v1Post": {
       "type": "object",
