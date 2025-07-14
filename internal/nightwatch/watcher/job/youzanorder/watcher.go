@@ -14,7 +14,7 @@ import (
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/nightwatch/watcher"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
-	"github.com/ashwinyue/dcp/internal/pkg
+	"github.com/ashwinyue/dcp/internal/pkg/log"
 	"github.com/ashwinyue/dcp/pkg/streams"
 	"github.com/ashwinyue/dcp/pkg/streams/flow"
 )

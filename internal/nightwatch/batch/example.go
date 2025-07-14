@@ -38,10 +38,10 @@ func ExampleUsage() {
 	// Example 1: Create and process a train task
 	fmt.Println("=== Example 1: Train Task ===")
 	trainConfig := &BatchConfig{
-		BatchSize:   5,
-		MaxRetries:  3,
-		Timeout:     30 * time.Second,
-		Concurrency: 2,
+		BatchSize:     5,
+		Retries:       3,
+		Timeout:       30 * time.Second,
+		ConcurrentNum: 2,
 	}
 
 	trainResp, err := CreateTrainTask(taskManager, trainConfig)
@@ -75,10 +75,10 @@ func ExampleUsage() {
 	// Example 2: Create and process a YouZan order task
 	fmt.Println("\n=== Example 2: YouZan Order Task ===")
 	orderConfig := &BatchConfig{
-		BatchSize:   10,
-		MaxRetries:  2,
-		Timeout:     60 * time.Second,
-		Concurrency: 3,
+		BatchSize:     10,
+		Retries:       2,
+		Timeout:       60 * time.Second,
+		ConcurrentNum: 3,
 	}
 
 	orderResp, err := CreateYouZanOrderTask(taskManager, orderConfig)
@@ -112,10 +112,10 @@ func ExampleUsage() {
 	// Example 3: Create and process a batch task
 	fmt.Println("\n=== Example 3: Batch Process Task ===")
 	batchConfig := &BatchConfig{
-		BatchSize:   20,
-		MaxRetries:  1,
-		Timeout:     45 * time.Second,
-		Concurrency: 4,
+		BatchSize:     20,
+		Retries:       1,
+		Timeout:       45 * time.Second,
+		ConcurrentNum: 4,
 	}
 
 	batchResp, err := CreateBatchProcessTask(taskManager, batchConfig)
@@ -177,8 +177,8 @@ func ExampleCustomProcessor() {
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 			Config: &BatchConfig{
-				BatchSize:   5,
-				Concurrency: 2,
+				BatchSize:     5,
+				ConcurrentNum: 2,
 			},
 			Progress: &TaskProgress{},
 		},
@@ -189,8 +189,8 @@ func ExampleCustomProcessor() {
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 			Config: &BatchConfig{
-				BatchSize:   3,
-				Concurrency: 1,
+				BatchSize:     3,
+				ConcurrentNum: 1,
 			},
 			Progress: &TaskProgress{},
 		},

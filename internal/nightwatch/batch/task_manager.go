@@ -167,11 +167,15 @@ func (tm *TaskManager) processTrainTask(ctx ProcessingContext, item *BatchItem[*
 	// Simulate train processing
 	time.Sleep(time.Duration(task.Config.BatchSize) * time.Second)
 
+	resultData := map[string]interface{}{"model": "trained", "accuracy": 0.95}
 	result := &BatchResult[any]{
-		ID:          task.ID,
-		Data:        map[string]interface{}{"model": "trained", "accuracy": 0.95},
-		ProcessedAt: time.Now(),
-		Success:     true,
+		Item: &BatchItem[any]{
+			ID:   task.ID,
+			Data: task,
+		},
+		Result:         resultData,
+		Success:        true,
+		ProcessingTime: time.Since(time.Now()),
 	}
 
 	tm.updateTaskProgress(task.ID, 100)
