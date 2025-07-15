@@ -60,6 +60,9 @@ func (w *Watcher) Run() {
 
 	log.Infow("Found runnable batch jobs", "count", len(jobs))
 
+	// 处理恢复机制
+	w.handleJobRecovery(jobs)
+
 	wp := workerpool.New(int(w.MaxWorkers))
 	for _, job := range jobs {
 		ctx := context.Background()
@@ -74,6 +77,33 @@ func (w *Watcher) Run() {
 	}
 
 	wp.StopWait()
+}
+
+// handleJobRecovery 处理任务恢复逻辑（简化版本）
+func (w *Watcher) handleJobRecovery(jobs []*model.JobM) {
+	for _, job := range jobs {
+		// 快速验证：只检查关键字段
+		if !ValidateJobIntegrity(job) {
+			log.Errorw("Job data integrity validation failed", "job_id", job.JobID)
+			continue
+		}
+
+		// 简单的中断检测和恢复
+		if IsJobInterrupted(job) {
+			log.Infow("Found interrupted job, preparing for recovery", "job_id", job.JobID, "status", job.Status)
+
+			// 简单恢复：只重置时间戳
+			PrepareJobForRecovery(job)
+
+			// 更新数据库
+			if err := w.Store.Job().Update(context.Background(), job); err != nil {
+				log.Errorw("Failed to update job for recovery", "job_id", job.JobID, "error", err)
+				continue
+			}
+
+			log.Infow("Job prepared for recovery", "job_id", job.JobID, "status", job.Status)
+		}
+	}
 }
 
 // processJob processes a single batch job - only data layer processing

@@ -6,19 +6,19 @@
 
 与 llmtrain 包保持一致的简洁命名：
 
-- `watcher.go` - 数据层转换任务监控器，支持异步任务创建
+- `watcher.go` - 数据层转换任务监控器，支持异步任务创建和恢复机制
 - `fsm.go` - 数据层转换的有限状态机定义
-- `event.go` - FSM 事件处理逻辑和数据层组件
-- `helper.go` - 辅助函数（超时检查、幂等性等）
+- `event.go` - FSM 事件处理逻辑和数据层组件，支持断点续传
+- `helper.go` - 辅助函数（超时检查、幂等性、恢复机制等）
 - `README.md` - 系统文档
 
 ## 系统架构
 
 ### 1. 核心组件
 
-- **Watcher**: 监控和调度数据层转换任务，使用异步 CreateTask 模式
+- **Watcher**: 监控和调度数据层转换任务，使用异步 CreateTask 模式，支持任务恢复
 - **StateMachine**: 数据层转换的有限状态机
-- **DataLayerProcessor**: 数据层转换处理器
+- **DataLayerProcessor**: 数据层转换处理器，支持从任意状态恢复
 - **DataLayerSource/Sink**: 数据层的读写连接器
 - **BatchManager**: 批处理任务管理器（位于 `internal/pkg/client/batch/`）
 
@@ -44,106 +44,60 @@ Landing → ODS → DWD → DWS → DS
 Pending → LandingToODS → ODSToDWD → DWDToDWS → DWSToDS → Completed → Succeeded
 ```
 
-## 异步处理机制
+## 恢复机制
 
-### 为什么使用异步处理？
+### 核心原理
 
-类似于 LLMTrain 的 Train 方法，数据层转换任务是耗时的操作：
-- 涉及多个数据层的转换（Landing → ODS → DWD → DWS → DS）
-- 每个转换阶段都可能很耗时
-- 为避免 worker 被长时间占用，采用异步 CreateTask 模式
+你的理解是完全正确的！系统通过**状态标记**实现恢复：
 
-### 异步处理流程
+1. **数据库持久化**: 所有任务状态保存在 `nw_job` 表中
+2. **状态查询**: 重启后查询所有未完成的任务
+3. **断点续传**: 直接从当前状态继续处理
 
-1. **任务创建**: 使用 `createDataLayerTaskFunc` 创建异步任务
-2. **状态轮询**: 通过 `GetTaskStatus` 检查任务状态
-3. **非阻塞处理**: Worker 不会被长时间占用，可以处理其他任务
-4. **状态管理**: 任务状态保存在 `JobResults.Batch` 中
+### 工作流程
 
-```go
-// 异步任务创建示例
-createDataLayerTaskFunc := func() error {
-    taskID, err := w.BatchManager.CreateTask(ctx, job.JobID, params)
-    if err != nil {
-        return err
-    }
-    results.TaskID = &taskID
-    return nil
-}
-
-// 状态检查
-task, err := w.BatchManager.GetTaskStatus(ctx, *results.TaskID)
-if task.Status != batchclient.BatchTaskStatusCompleted {
-    // 任务未完成，等待下次轮询
-    return nil
-}
+```
+1. 系统重启
+2. Watcher启动（每10秒运行）
+3. 查询未完成任务（Pending → Completed之间的所有状态）
+4. 检查是否超时中断
+5. 直接从当前状态继续处理
 ```
 
-## 使用方式
+### 恢复逻辑
 
-### 数据层转换任务
-
-系统会自动识别数据层转换任务并使用异步处理：
+系统会根据任务的当前状态直接恢复处理：
 
 ```go
-// Watcher 会自动处理
-// 1. 检查任务状态
-// 2. 创建异步任务（如果尚未创建）
-// 3. 轮询任务状态
-// 4. 更新作业状态
-```
-
-## 配置选项
-
-```go
-// 数据层处理配置
-params := map[string]interface{}{
-    "batch_size": known.DataLayerBatchSize,
-    "timeout":    known.DataLayerProcessTimeout,
-    "retries":    3,
-    "concurrent": known.DataLayerMaxWorkers,
-    "total":      int64(1000),
+switch job.Status {
+case DataLayerPending:      // 从头开始
+case DataLayerLandingToODS: // 继续Landing→ODS
+case DataLayerODSToDWD:     // 继续ODS→DWD  
+case DataLayerDWDToDWS:     // 继续DWD→DWS
+case DataLayerDWSToDS:      // 继续DWS→DS
+case DataLayerCompleted:    // 完成处理
 }
 ```
 
-## 监控和统计
+### 中断检测
 
-系统提供详细的处理统计信息：
+- **超时检测**: 检查任务是否超过配置的超时时间
+- **状态一致性**: 确保任务状态与实际处理进度一致
 
-- 任务 ID 和状态
-- 处理进度（百分比）
-- 当前转换阶段
-- 结果输出路径
-- 错误信息（如果有）
+### 使用示例
 
-## 与 LLMTrain 的一致性
+```go
+// 1. 有一批数据需要处理，状态标记为 Pending
+// 2. 系统开始处理，状态变为 LandingToODS
+// 3. 系统崩溃/重启
+// 4. 重启后，查询到状态为 LandingToODS 的任务
+// 5. 直接从 LandingToODS 状态继续处理
+// 6. 完成后状态变为 ODSToDWD，以此类推
+```
 
-- **异步处理**: 都使用 CreateTask 避免 worker 被占用
-- **状态轮询**: 都使用 GetTaskStatus 检查任务状态
-- **文件结构**: 都使用 watcher.go、fsm.go、event.go、helper.go 的简洁命名
-- **错误处理**: 都支持超时检查和幂等性处理
+### 优势
 
-## 扩展性
-
-系统设计为可扩展的：
-
-1. **自定义数据源**: 扩展 DataLayerSource
-2. **自定义处理器**: 扩展 DataLayerProcessor
-3. **自定义转换逻辑**: 修改各层的转换函数
-4. **自定义状态机**: 扩展 StateMachine 的状态和事件
-
-## 错误处理
-
-- 支持幂等性检查
-- 自动重试机制
-- 超时处理
-- 状态恢复
-- 异步任务失败处理
-
-## 性能优化
-
-- 异步处理避免 worker 阻塞
-- 并发处理支持
-- 缓冲区优化
-- 限流控制
-- 资源管理 
+- **简单可靠**: 基于数据库状态，无需复杂的检查点机制
+- **自动恢复**: 重启后自动继续处理
+- **幂等性**: 重复执行不会产生副作用
+- **透明化**: 对业务逻辑透明，无需特殊处理 

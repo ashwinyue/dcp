@@ -42,14 +42,44 @@ func NewDataLayerProcessor(ctx context.Context, job *model.JobM, db *gorm.DB) *D
 
 // Process starts the data layer processing pipeline
 func (dlp *DataLayerProcessor) Process() error {
-	log.Infow("Starting data layer processing", "job_id", dlp.job.JobID)
+	log.Infow("Starting data layer processing", "job_id", dlp.job.JobID, "current_status", dlp.job.Status)
 
-	// Trigger the FSM to start processing
-	if err := dlp.fsm.Event(dlp.ctx, known.DataLayerEventStart); err != nil {
-		return fmt.Errorf("failed to start data layer processing: %w", err)
+	// 简化恢复逻辑：直接从当前状态开始处理
+	switch dlp.job.Status {
+	case known.DataLayerPending:
+		// 从头开始处理
+		return dlp.fsm.Event(dlp.ctx, known.DataLayerEventStart)
+
+	case known.DataLayerLandingToODS:
+		// 继续LandingToODS处理
+		log.Infow("Resuming from LandingToODS state", "job_id", dlp.job.JobID)
+		return dlp.transformLandingToODS(dlp.ctx, nil)
+
+	case known.DataLayerODSToDWD:
+		// 继续ODSToDWD处理
+		log.Infow("Resuming from ODSToDWD state", "job_id", dlp.job.JobID)
+		return dlp.transformODSToDWD(dlp.ctx, nil)
+
+	case known.DataLayerDWDToDWS:
+		// 继续DWDToDWS处理
+		log.Infow("Resuming from DWDToDWS state", "job_id", dlp.job.JobID)
+		return dlp.transformDWDToDWS(dlp.ctx, nil)
+
+	case known.DataLayerDWSToDS:
+		// 继续DWSToDS处理
+		log.Infow("Resuming from DWSToDS state", "job_id", dlp.job.JobID)
+		return dlp.transformDWSToDS(dlp.ctx, nil)
+
+	case known.DataLayerCompleted:
+		// 处理完成状态
+		log.Infow("Resuming from Completed state", "job_id", dlp.job.JobID)
+		return dlp.handleComplete(dlp.ctx, nil)
+
+	default:
+		// 其他状态从头开始
+		log.Infow("Unknown status, starting from beginning", "job_id", dlp.job.JobID, "status", dlp.job.Status)
+		return dlp.fsm.Event(dlp.ctx, known.DataLayerEventStart)
 	}
-
-	return nil
 }
 
 // GetJob returns the job associated with this processor
