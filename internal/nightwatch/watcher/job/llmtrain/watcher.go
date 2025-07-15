@@ -10,6 +10,8 @@ import (
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/nightwatch/watcher"
+	"github.com/ashwinyue/dcp/internal/pkg/client/minio"
+	"github.com/ashwinyue/dcp/internal/pkg/client/train"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
 )
@@ -25,6 +27,9 @@ type Limiter struct {
 
 // Watcher monitors and processes daily estimation jobs.
 type Watcher struct {
+	//Metric          metrics.Metric
+	Train *train.TrainManager
+	Minio minio.IMinio
 	Store store.IStore
 
 	// Maximum number of concurrent workers.
@@ -81,6 +86,8 @@ func (w *Watcher) Spec() string {
 
 // SetAggregateConfig configures the watcher with the provided aggregate configuration.
 func (w *Watcher) SetAggregateConfig(config *watcher.AggregateConfig) {
+	w.Train = train.NewTrainManager()
+	w.Minio = config.Minio
 	w.Store = config.Store
 	w.Limiter = Limiter{
 		Embedding: ratelimit.New(known.LLMTrainEmbeddingQPS),

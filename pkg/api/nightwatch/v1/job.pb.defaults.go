@@ -26,6 +26,9 @@ func (x *TrainParams) Default() {
 func (x *JobResults) Default() {
 }
 
+func (x *BatchResults) Default() {
+}
+
 func (x *TrainResults) Default() {
 }
 

@@ -15,7 +15,6 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.0
 	github.com/jinzhu/copier v0.4.0
 	github.com/looplab/fsm v1.0.3
-	github.com/marmotedu/miniblog v1.0.0
 	github.com/onexstack/onexstack v0.0.1
 	github.com/onexstack/protoc-gen-defaults v0.0.2
 	github.com/prometheus/common v0.60.0

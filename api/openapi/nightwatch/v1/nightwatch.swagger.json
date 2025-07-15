@@ -738,6 +738,32 @@
         }
       }
     },
+    "v1BatchResults": {
+      "type": "object",
+      "properties": {
+        "taskID": {
+          "type": "string"
+        },
+        "progressPath": {
+          "type": "string"
+        },
+        "resultPath": {
+          "type": "string"
+        },
+        "processed": {
+          "type": "string",
+          "format": "int64"
+        },
+        "total": {
+          "type": "string",
+          "format": "int64"
+        },
+        "percent": {
+          "type": "number",
+          "format": "float"
+        }
+      }
+    },
     "v1ConcurrencyPolicy": {
       "type": "string",
       "enum": [
@@ -1021,6 +1047,9 @@
       "properties": {
         "train": {
           "$ref": "#/definitions/v1TrainResults"
+        },
+        "batch": {
+          "$ref": "#/definitions/v1BatchResults"
         }
       }
     },

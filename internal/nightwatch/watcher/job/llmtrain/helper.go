@@ -6,7 +6,6 @@ import (
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
 	jobconditionsutil "github.com/ashwinyue/dcp/internal/pkg/util/jobconditions"
-	v1 "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1"
 )
 
 // isJobTimeout checks if the job has exceeded its allowed execution time.
@@ -35,10 +34,4 @@ func SetDefaultJobParams(job *model.JobM) {
 	if job.Params.Train.JobTimeout == 0 {
 		job.Params.Train.JobTimeout = int64(known.LLMTrainTimeout)
 	}
-}
-
-// buildEmbedderInputs generates inputs for embedding based on the specified embedder type.
-func buildEmbedderInputs(params *v1.TrainParams) []any {
-	// TODO: Implement proper embedder input building
-	return []any{}
 }

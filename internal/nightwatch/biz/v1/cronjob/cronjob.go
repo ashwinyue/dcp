@@ -65,8 +65,6 @@ func New(store store.IStore) *cronJobBiz {
 func (b *cronJobBiz) Create(ctx context.Context, rq *v1.CreateCronJobRequest) (*v1.CreateCronJobResponse, error) {
 	var cronJobM model.CronJobM
 	_ = core.Copy(&cronJobM, rq)
-	// TODO: Retrieve the UserID from the custom context and assign it as needed.
-	// cronJobM.UserID = contextx.UserID(ctx)
 
 	if err := b.store.CronJob().Create(ctx, &cronJobM); err != nil {
 		return nil, err

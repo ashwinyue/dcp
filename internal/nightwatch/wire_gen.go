@@ -11,9 +11,7 @@ import (
 	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/validation"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/pkg/server"
-)
 
-import (
 	_ "github.com/ashwinyue/dcp/internal/nightwatch/watcher/all"
 )
 

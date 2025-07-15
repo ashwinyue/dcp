@@ -8,6 +8,7 @@ package nightwatch
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -25,6 +26,7 @@ import (
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/nightwatch/watcher"
 	_ "github.com/ashwinyue/dcp/internal/nightwatch/watcher/all"
+	"github.com/ashwinyue/dcp/internal/pkg/client/minio/fake"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
 	"github.com/ashwinyue/dcp/internal/pkg/server"
 )
@@ -126,12 +128,46 @@ func (cfg *Config) NewUnionServer() (*UnionServer, error) {
 	}, nil
 }
 
-// CreateWatcherConfig 创建watcher配置.
+// NewDB 创建数据库连接
+func (cfg *Config) NewDB() (*gorm.DB, error) {
+	// 使用 SQLite 数据库
+	db, err := gorm.Open(sqlite.Open("nightwatch.db"), &gorm.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect database: %w", err)
+	}
+
+	// 自动迁移数据库模式
+	err = db.AutoMigrate(
+		&model.CronJobM{},
+		&model.JobM{},
+		&model.PostM{},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to migrate database: %w", err)
+	}
+
+	return db, nil
+}
+
+// ProvideDB 提供数据库实例给 Wire
+func ProvideDB(cfg *Config) (*gorm.DB, error) {
+	return cfg.NewDB()
+}
+
+// CreateWatcherConfig used to create configuration used by all watcher.
 func (cfg *Config) CreateWatcherConfig(db *gorm.DB) (*watcher.AggregateConfig, error) {
 	storeClient := store.NewStore(db)
 
+	// 创建 MinIO 客户端 (使用 fake 实现)
+	minioClient, err := fake.NewFakeMinioClient("default-bucket")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create MinIO client: %w", err)
+	}
+
 	return &watcher.AggregateConfig{
 		Store:                 storeClient,
+		DB:                    db,
+		Minio:                 minioClient,
 		UserWatcherMaxWorkers: cfg.UserWatcherMaxWorkers,
 	}, nil
 }
@@ -160,80 +196,34 @@ func (s *UnionServer) Run() error {
 	log.Infow("Shutting down server ...")
 
 	// 优雅关闭服务
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// 先关闭watcher服务
 	if s.watch != nil {
 		log.Infow("Stopping watcher service")
 		s.watch.Stop()
 	}
 
-	// 再关闭依赖的服务，最后关闭被依赖的服务
-	s.srv.GracefulStop(ctx)
+	if s.srv != nil {
+		log.Infow("Stopping server")
+		s.srv.GracefulStop(ctx)
+	}
 
-	log.Infow("Server exited")
+	// 关闭数据库连接
+	if s.db != nil {
+		if sqlDB, err := s.db.DB(); err == nil {
+			sqlDB.Close()
+		}
+	}
+
+	log.Infow("Server exiting")
+
 	return nil
 }
 
-// NewDB 创建一个 *gorm.DB 实例.
-func (cfg *Config) NewDB() (*gorm.DB, error) {
-	var db *gorm.DB
-	var err error
-
-	if !cfg.EnableMemoryStore {
-		log.Infow("Initializing database connection", "type", "mysql", "addr", cfg.MySQLOptions.Addr)
-		db, err = cfg.MySQLOptions.NewDB()
-	} else {
-		log.Infow("Initializing database connection", "type", "memory", "engine", "SQLite")
-		// 使用SQLite内存模式配置数据库
-		// ?cache=shared 用于设置 SQLite 的缓存模式为 共享缓存模式 (shared)。
-		// 默认情况下，SQLite 的每个数据库连接拥有自己的独立缓存，这种模式称为 专用缓存 (private)。
-		// 使用 共享缓存模式 (shared) 后，不同连接可以共享同一个内存中的数据库和缓存。
-		db, err = gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	}
-
-	if err != nil {
-		log.Errorw("Failed to create database connection", "err", err)
-		return nil, err
-	}
-
-	// 自动迁移数据库表结构
-	log.Infow("Auto-migrating database tables")
-	if cfg.EnableMemoryStore {
-		// 使用SQLite兼容的模型
-		err = db.AutoMigrate(
-			&model.CronJobSQLite{},
-			&model.JobSQLite{},
-		)
-	} else {
-		// 使用MySQL模型，只迁移nightwatch自己的表
-		err = db.AutoMigrate(
-			&model.CronJobM{},
-			&model.JobM{},
-			// 暂时移除PostM，避免与现有表结构冲突
-			// &model.PostM{},
-		)
-	}
-	if err != nil {
-		log.Errorw("Failed to auto-migrate database tables", "err", err)
-		return nil, err
-	}
-	log.Infow("Database tables auto-migration completed successfully")
-
-	return db, nil
-}
-
-// ProvideDB 根据配置提供一个数据库实例。
-func ProvideDB(cfg *Config) (*gorm.DB, error) {
-	return cfg.NewDB()
-}
-
+// NewWebServer 根据服务器模式创建对应的服务器实例
 func NewWebServer(serverMode string, serverConfig *ServerConfig) (server.Server, error) {
 	// 根据服务模式创建对应的服务实例
-	// 实际企业开发中，可以根据需要只选择一种服务器模式.
-	// 这里为了方便给你展示，通过 cfg.ServerMode 同时支持了 Gin 和 GRPC 2 种服务器模式.
-	// 默认为 gRPC 服务器模式.
 	switch serverMode {
 	case GinServerMode:
 		return serverConfig.NewGinServer(), nil

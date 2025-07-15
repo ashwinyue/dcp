@@ -9,6 +9,9 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
+	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/path"
+	fakeminio "github.com/ashwinyue/dcp/internal/pkg/client/minio/fake"
+	"github.com/ashwinyue/dcp/internal/pkg/client/train"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
 	jobconditionsutil "github.com/ashwinyue/dcp/internal/pkg/util/jobconditions"
@@ -32,14 +35,14 @@ func (sm *StateMachine) Download(ctx context.Context, event *fsm.Event) error {
 		sm.Job.Results = &model.JobResults{Train: &v1.TrainResults{}}
 	}
 
-	// TODO: Implement actual download logic here
-	// This would typically involve:
-	// 1. Downloading training data from specified sources
-	// 2. Validating downloaded data
-	// 3. Storing data in appropriate location
-
-	// Simulate data download
-	dataPath := fmt.Sprintf("job-%s-data.json", sm.Job.JobID)
+	data, err := sm.Watcher.Minio.Read(ctx, fakeminio.FakeObjectName)
+	if err != nil {
+		return err
+	}
+	dataPath := path.Job.Path(sm.Job.JobID, path.JobDataName)
+	if err := sm.Watcher.Minio.Write(ctx, dataPath, data); err != nil {
+		return err
+	}
 	sm.Job.Results.Train.DataPath = &dataPath
 
 	sm.Job.Conditions = jobconditionsutil.Set(sm.Job.Conditions, jobconditionsutil.TrueCondition(event.FSM.Current()))
@@ -54,21 +57,42 @@ func (sm *StateMachine) Embedding(ctx context.Context, event *fsm.Event) error {
 
 	results := sm.Job.Results.Train
 
-	// Simulate embedding process with rate limiting
-	_ = sm.Watcher.Limiter.Embedding.Take()
+	// Retrieve the downloaded feedback data from TOS
+	docs, err := sm.Watcher.Minio.Read(ctx, *results.DataPath)
+	if err != nil {
+		return err
+	}
 
-	// TODO: Implement actual embedding logic here
-	// This would typically involve:
-	// 1. Processing downloaded data through embedding models
-	// 2. Generating vector embeddings
-	// 3. Storing embeddings for training use
+	// Example of calling a handwritten embedder package.
+	/*
+		var typedEmbedder onexembedder.Embedder
+		switch EmbedderType {
+		case onexembedder.TextEmbeddingType:
+			typedEmbedder = text.NewEmbedder(llm)
+		case onexembedder.ImageEmbeddingType:
+			typedEmbedder = image.NewEmbedder(llm)
+		default:
+		}
+		// Create a new embedder with rate limiting
+		embedder := onexembedder.NewEmbedder(typedEmbedder, onexembedder.WithRateLimiter(sm.Watcher.Limiter.Embedding))
+		inputs := buildEmbedderInputs(EmbedderType, params)
+		embs, err := embedder.Embedding(ctx, inputs)
+		if err != nil {
+			return err
+		}
+	*/
 
 	// Simulate embedding process
-	time.Sleep(time.Second)
+	embedingsStr := make([]string, len(docs))
+	for i, doc := range docs {
+		embedingsStr[i] = fmt.Sprintf("embedding_%d: %s", i, doc)
+	}
 
-	// Update results and write the embedded data
-	embeddedDataPath := fmt.Sprintf("job-%s-embedded.json", sm.Job.JobID)
-	results.EmbeddedDataPath = ptr.To(embeddedDataPath)
+	// Update results and write the embedded data to TOS
+	results.EmbeddedDataPath = ptr.To(path.Job.Path(sm.Job.JobID, path.JobEmbeddedDataName))
+	if err := sm.Watcher.Minio.Write(ctx, *results.EmbeddedDataPath, embedingsStr); err != nil {
+		return err
+	}
 
 	results.TaskID = nil
 	jobconditionsutil.Delete(sm.Job.Conditions, known.LLMTrainTrained)
@@ -85,10 +109,13 @@ func (sm *StateMachine) Train(ctx context.Context, event *fsm.Event) error {
 	results := sm.Job.Results.Train
 	_ = sm.Watcher.Limiter.Train.Take() // Rate limiting
 
-	// Function to create the training task
+	// Function to create the Arthur training task
 	createTrainTaskFunc := func() error {
-		resultPath := fmt.Sprintf("job-%s-result.json", sm.Job.JobID)
-		taskID := fmt.Sprintf("task-%s", sm.Job.JobID)
+		resultPath := path.Job.Path(sm.Job.JobID, path.JobResultName)
+		taskID, err := sm.Watcher.Train.CreateTask(ctx, *results.EmbeddedDataPath, resultPath)
+		if err != nil {
+			return err
+		}
 		results.TaskID = &taskID
 		results.ResultPath = &resultPath
 		return nil
@@ -101,16 +128,17 @@ func (sm *StateMachine) Train(ctx context.Context, event *fsm.Event) error {
 		}
 	}
 
-	// TODO: Implement actual training logic here
-	// This would typically involve:
-	// 1. Loading embedded data
-	// 2. Configuring training parameters
-	// 3. Running the training process
-	// 4. Monitoring training progress
-	// 5. Saving trained model
+	status, err := sm.Watcher.Train.GetTaskStatus(ctx, *results.TaskID)
+	if err != nil {
+		log.Errorw("Failed to GetTask", "error", err)
+		return err
+	}
 
-	// Simulate training process
-	time.Sleep(time.Second)
+	if status != train.StatusCompleted {
+		log.Infow("Train task has not been completed", "status", status)
+		event.FSM.SetState(event.Event)
+		return nil
+	}
 
 	sm.Job.Conditions = jobconditionsutil.Set(sm.Job.Conditions, jobconditionsutil.TrueCondition(event.FSM.Current()))
 	return nil
@@ -146,5 +174,30 @@ func (sm *StateMachine) EnterState(ctx context.Context, event *fsm.Event) error 
 		return err
 	}
 
+	//sm.MustMetrics(ctx, event)
+
 	return nil
 }
+
+/*
+func (sm *StateMachine) MustMetrics(ctx context.Context, event *fsm.Event) {
+	// Record metrics only on success or failure.
+	if !stringsutil.StringIn(sm.Job.Status, []string{known.DailyEstimationSucceeded, known.DailyEstimationFailed}) {
+		return
+	}
+
+	tags := []metrics.T{
+		{Name: "env", Value: env.Env()},
+		{Name: "tenant", Value: sm.Job.Tenant},
+		{Name: "job_id", Value: strconv.FormatInt(sm.Job.ID, 10)},
+		{Name: "model_id", Value: strconv.FormatInt(*sm.Job.Params.DailyEstimation.ModelID, 10)},
+		{Name: "max_feedback_nums", Value: strconv.FormatInt(gptr.Indirect(sm.Job.Params.DailyEstimation.MaxFeedbackNums), 10)},
+		{Name: "status", Value: sm.Job.Status},
+		{Name: "cost", Value: strconv.Itoa(int(sm.Job.EndedAt.Sub(sm.Job.StartedAt).Seconds()))},
+	}
+
+	if err := sm.Watcher.Metric.WithTags(tags...).Emit(metrics.IncrCounter(1)); err != nil {
+		log.Errorw(err, "Failed to emit metrics")
+	}
+}
+*/

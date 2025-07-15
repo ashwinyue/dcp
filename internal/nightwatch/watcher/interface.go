@@ -1,6 +1,8 @@
 package watcher
 
 import (
+	"gorm.io/gorm"
+
 	"github.com/onexstack/onexstack/pkg/watch/registry"
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
@@ -16,4 +18,10 @@ type WantsAggregateConfig interface {
 type WantsStore interface {
 	registry.Watcher
 	SetStore(store store.IStore)
+}
+
+// WantsDB defines a function which sets database connection for watcher plugins that need it.
+type WantsDB interface {
+	registry.Watcher
+	SetDB(db *gorm.DB)
 }

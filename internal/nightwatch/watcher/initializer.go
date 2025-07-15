@@ -31,4 +31,8 @@ func (w *WatcherInitializer) Initialize(wc registry.Watcher) {
 	if wants, ok := wc.(WantsAggregateConfig); ok {
 		wants.SetAggregateConfig(w.AggregateConfig)
 	}
+
+	if wants, ok := wc.(WantsDB); ok {
+		wants.SetDB(w.DB)
+	}
 }

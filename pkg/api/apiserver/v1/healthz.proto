@@ -9,7 +9,7 @@ syntax = "proto3"; // 告诉编译器此文件使用什么版本的语法
 
 package v1;
 
-option go_package = "github.com/ashwinyue/dcp/pkg/api/apiserver/v1";
+option go_package = "github.com/ashwinyue/dcp/pkg/api/apiserver/v1;v1";
 
 // ServiceStatus 表示服务的健康状态
 enum ServiceStatus {

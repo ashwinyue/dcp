@@ -1,0 +1,305 @@
+package batch
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/looplab/fsm"
+	"gorm.io/gorm"
+
+	"github.com/ashwinyue/dcp/internal/nightwatch/model"
+	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
+	"github.com/ashwinyue/dcp/internal/pkg/log"
+)
+
+// DataLayerProcessor manages data layer transformations using FSM
+type DataLayerProcessor struct {
+	job    *model.JobM
+	fsm    *StateMachine
+	ctx    context.Context
+	cancel context.CancelFunc
+	db     *gorm.DB
+}
+
+// NewDataLayerProcessor creates a new data layer processor
+func NewDataLayerProcessor(ctx context.Context, job *model.JobM, db *gorm.DB) *DataLayerProcessor {
+	cctx, cancel := context.WithCancel(ctx)
+
+	processor := &DataLayerProcessor{
+		job:    job,
+		ctx:    cctx,
+		cancel: cancel,
+		db:     db,
+	}
+
+	// Initialize FSM
+	processor.fsm = NewStateMachine(processor)
+
+	return processor
+}
+
+// Process starts the data layer processing pipeline
+func (dlp *DataLayerProcessor) Process() error {
+	log.Infow("Starting data layer processing", "job_id", dlp.job.JobID)
+
+	// Trigger the FSM to start processing
+	if err := dlp.fsm.Event(dlp.ctx, known.DataLayerEventStart); err != nil {
+		return fmt.Errorf("failed to start data layer processing: %w", err)
+	}
+
+	return nil
+}
+
+// GetJob returns the job associated with this processor
+func (dlp *DataLayerProcessor) GetJob() *model.JobM {
+	return dlp.job
+}
+
+// Stop stops the data layer processing
+func (dlp *DataLayerProcessor) Stop() {
+	log.Infow("Stopping data layer processing", "job_id", dlp.job.JobID)
+	dlp.cancel()
+}
+
+// FSM event handlers
+
+// transformLandingToODS processes data from Landing to ODS layer
+func (dlp *DataLayerProcessor) transformLandingToODS(ctx context.Context, event *fsm.Event) error {
+	log.Infow("Transforming data from Landing to ODS", "job_id", dlp.job.JobID)
+
+	// Create source and sink for Landing to ODS transformation
+	source := NewDataLayerSource(ctx, dlp.job, known.DataLayerLanding, dlp.db)
+	sink := NewDataLayerSink(ctx, dlp.job, known.DataLayerODS, dlp.db)
+
+	// Process data transformation
+	go func() {
+		for item := range source.Out() {
+			// Simulate data transformation
+			time.Sleep(10 * time.Millisecond)
+			transformedItem := fmt.Sprintf("ods_%v", item)
+			sink.In() <- transformedItem
+		}
+		close(sink.In())
+	}()
+
+	// Wait for processing to complete
+	sink.Wait()
+
+	// Trigger next event
+	return dlp.fsm.Event(ctx, known.DataLayerEventLandingToODSComplete)
+}
+
+// transformODSToDWD processes data from ODS to DWD layer
+func (dlp *DataLayerProcessor) transformODSToDWD(ctx context.Context, event *fsm.Event) error {
+	log.Infow("Transforming data from ODS to DWD", "job_id", dlp.job.JobID)
+
+	// Create source and sink for ODS to DWD transformation
+	source := NewDataLayerSource(ctx, dlp.job, known.DataLayerODS, dlp.db)
+	sink := NewDataLayerSink(ctx, dlp.job, known.DataLayerDWD, dlp.db)
+
+	// Process data transformation
+	go func() {
+		for item := range source.Out() {
+			// Simulate data transformation
+			time.Sleep(15 * time.Millisecond)
+			transformedItem := fmt.Sprintf("dwd_%v", item)
+			sink.In() <- transformedItem
+		}
+		close(sink.In())
+	}()
+
+	// Wait for processing to complete
+	sink.Wait()
+
+	// Trigger next event
+	return dlp.fsm.Event(ctx, known.DataLayerEventODSToDWDComplete)
+}
+
+// transformDWDToDWS processes data from DWD to DWS layer
+func (dlp *DataLayerProcessor) transformDWDToDWS(ctx context.Context, event *fsm.Event) error {
+	log.Infow("Transforming data from DWD to DWS", "job_id", dlp.job.JobID)
+
+	// Create source and sink for DWD to DWS transformation
+	source := NewDataLayerSource(ctx, dlp.job, known.DataLayerDWD, dlp.db)
+	sink := NewDataLayerSink(ctx, dlp.job, known.DataLayerDWS, dlp.db)
+
+	// Process data transformation
+	go func() {
+		for item := range source.Out() {
+			// Simulate data transformation
+			time.Sleep(20 * time.Millisecond)
+			transformedItem := fmt.Sprintf("dws_%v", item)
+			sink.In() <- transformedItem
+		}
+		close(sink.In())
+	}()
+
+	// Wait for processing to complete
+	sink.Wait()
+
+	// Trigger next event
+	return dlp.fsm.Event(ctx, known.DataLayerEventDWDToDWSComplete)
+}
+
+// transformDWSToDS processes data from DWS to DS layer
+func (dlp *DataLayerProcessor) transformDWSToDS(ctx context.Context, event *fsm.Event) error {
+	log.Infow("Transforming data from DWS to DS", "job_id", dlp.job.JobID)
+
+	// Create source and sink for DWS to DS transformation
+	source := NewDataLayerSource(ctx, dlp.job, known.DataLayerDWS, dlp.db)
+	sink := NewDataLayerSink(ctx, dlp.job, known.DataLayerDS, dlp.db)
+
+	// Process data transformation
+	go func() {
+		for item := range source.Out() {
+			// Simulate data transformation
+			time.Sleep(25 * time.Millisecond)
+			transformedItem := fmt.Sprintf("ds_%v", item)
+			sink.In() <- transformedItem
+		}
+		close(sink.In())
+	}()
+
+	// Wait for processing to complete
+	sink.Wait()
+
+	// Trigger next event
+	return dlp.fsm.Event(ctx, known.DataLayerEventDWSToDS)
+}
+
+// handleComplete handles the completion of data layer processing
+func (dlp *DataLayerProcessor) handleComplete(ctx context.Context, event *fsm.Event) error {
+	log.Infow("Data layer processing completed", "job_id", dlp.job.JobID)
+
+	// Update job status
+	dlp.job.Status = known.DataLayerSucceeded
+	dlp.job.EndedAt = time.Now()
+
+	// Trigger completion event
+	return dlp.fsm.Event(ctx, known.DataLayerEventComplete)
+}
+
+// handleError handles errors during data layer processing
+func (dlp *DataLayerProcessor) handleError(ctx context.Context, event *fsm.Event) error {
+	log.Errorw("Data layer processing failed", "job_id", dlp.job.JobID, "error", event.Err)
+
+	// Update job status
+	dlp.job.Status = known.DataLayerFailed
+	dlp.job.EndedAt = time.Now()
+
+	return nil
+}
+
+// DataLayerSource represents a source for reading data from a specific data layer
+type DataLayerSource struct {
+	job    *model.JobM
+	layer  string
+	out    chan any
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	db     *gorm.DB
+}
+
+// NewDataLayerSource creates a new data layer source
+func NewDataLayerSource(ctx context.Context, job *model.JobM, layer string, db *gorm.DB) *DataLayerSource {
+	cctx, cancel := context.WithCancel(ctx)
+
+	source := &DataLayerSource{
+		job:    job,
+		layer:  layer,
+		out:    make(chan any, known.DataLayerBufferSize),
+		ctx:    cctx,
+		cancel: cancel,
+		db:     db,
+	}
+
+	go source.start()
+	return source
+}
+
+// start begins reading data from the specified data layer
+func (dls *DataLayerSource) start() {
+	defer close(dls.out)
+	defer dls.wg.Wait()
+
+	log.Infow("Starting data layer source", "layer", dls.layer, "job_id", dls.job.JobID)
+
+	// Simulate reading data from the data layer
+	for i := 0; i < known.DataLayerBatchSize; i++ {
+		select {
+		case <-dls.ctx.Done():
+			return
+		case dls.out <- fmt.Sprintf("%s_data_%d", dls.layer, i):
+		}
+	}
+
+	log.Infow("Data layer source completed", "layer", dls.layer, "job_id", dls.job.JobID)
+}
+
+// Out returns the output channel
+func (dls *DataLayerSource) Out() <-chan any {
+	return dls.out
+}
+
+// DataLayerSink represents a sink for writing data to a specific data layer
+type DataLayerSink struct {
+	job    *model.JobM
+	layer  string
+	in     chan any
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	db     *gorm.DB
+	count  int64
+}
+
+// NewDataLayerSink creates a new data layer sink
+func NewDataLayerSink(ctx context.Context, job *model.JobM, layer string, db *gorm.DB) *DataLayerSink {
+	cctx, cancel := context.WithCancel(ctx)
+
+	sink := &DataLayerSink{
+		job:    job,
+		layer:  layer,
+		in:     make(chan any, known.DataLayerBufferSize),
+		ctx:    cctx,
+		cancel: cancel,
+		db:     db,
+	}
+
+	go sink.start()
+	return sink
+}
+
+// start begins writing data to the specified data layer
+func (dls *DataLayerSink) start() {
+	defer dls.wg.Done()
+	dls.wg.Add(1)
+
+	log.Infow("Starting data layer sink", "layer", dls.layer, "job_id", dls.job.JobID)
+
+	for item := range dls.in {
+		select {
+		case <-dls.ctx.Done():
+			return
+		default:
+			// Simulate writing data to the data layer
+			log.Debugw("Writing data to layer", "layer", dls.layer, "data", item)
+			dls.count++
+		}
+	}
+
+	log.Infow("Data layer sink completed", "layer", dls.layer, "job_id", dls.job.JobID, "count", dls.count)
+}
+
+// In returns the input channel
+func (dls *DataLayerSink) In() chan<- any {
+	return dls.in
+}
+
+// Wait waits for the sink to complete processing
+func (dls *DataLayerSink) Wait() {
+	dls.wg.Wait()
+}

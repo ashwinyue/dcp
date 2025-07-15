@@ -50,6 +50,16 @@ message TrainParams {
 
 message JobResults{
   TrainResults train = 1;
+  BatchResults batch = 2;
+}
+
+message BatchResults {
+  optional string taskID = 1;
+  optional string progressPath = 2;
+  optional string resultPath = 3;
+  optional int64 processed = 4;
+  optional int64 total = 5;
+  optional float percent = 6;
 }
 
 message TrainResults {
