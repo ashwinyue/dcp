@@ -2,19 +2,17 @@ package batch
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/onexstack/onexstack/pkg/store/where"
+	"gorm.io/gorm"
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/pkg/client/minio"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
 	v1 "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1"
-	"github.com/ashwinyue/dcp/pkg/streams"
 )
 
 // BatchTaskStatus 表示批处理任务的状态
@@ -38,18 +36,36 @@ type BatchTask struct {
 	Updated  time.Time              `json:"updated"`
 }
 
-// BatchManager 管理批处理任务
-type BatchManager struct {
-	store store.IStore
-	minio minio.IMinio
+// DataLayerProcessor 接口定义数据层处理器的行为
+type DataLayerProcessor interface {
+	Process() error
+	GetJob() *model.JobM
+	Stop()
 }
 
-// NewBatchManager 创建新的批处理管理器
-func NewBatchManager(store store.IStore, minio minio.IMinio) *BatchManager {
+// DataLayerProcessorFactory 工厂函数类型，用于创建DataLayerProcessor
+type DataLayerProcessorFactory func(ctx context.Context, job *model.JobM, db *gorm.DB) DataLayerProcessor
+
+// BatchManager 管理批处理任务
+type BatchManager struct {
+	store                     store.IStore
+	minio                     minio.IMinio
+	db                        *gorm.DB
+	dataLayerProcessorFactory DataLayerProcessorFactory
+}
+
+// NewBatchManager 创建带数据库连接的批处理管理器
+func NewBatchManager(store store.IStore, minio minio.IMinio, db *gorm.DB) *BatchManager {
 	return &BatchManager{
 		store: store,
 		minio: minio,
+		db:    db,
 	}
+}
+
+// SetDataLayerProcessorFactory 设置数据层处理器工厂函数
+func (bm *BatchManager) SetDataLayerProcessorFactory(factory DataLayerProcessorFactory) {
+	bm.dataLayerProcessorFactory = factory
 }
 
 // CreateTask 创建异步批处理任务
@@ -69,19 +85,8 @@ func (bm *BatchManager) CreateTask(ctx context.Context, jobID string, params map
 	return taskID, nil
 }
 
-// ProcessBatch 直接使用 pump 模式处理批处理任务
+// ProcessBatch 处理批处理任务，专注于数据层转换
 func (bm *BatchManager) ProcessBatch(ctx context.Context, jobID string, params map[string]interface{}) error {
-	// 从参数中获取配置
-	total := int64(1000)
-	batchSize := int64(100)
-
-	if t, ok := params["total"].(int64); ok {
-		total = t
-	}
-	if bs, ok := params["batch_size"].(int64); ok {
-		batchSize = bs
-	}
-
 	// 创建任务ID
 	taskID := fmt.Sprintf("batch_%s_%d", jobID, time.Now().Unix())
 
@@ -91,29 +96,46 @@ func (bm *BatchManager) ProcessBatch(ctx context.Context, jobID string, params m
 		return err
 	}
 
-	// 创建 pump 模式的组件
-	source := NewBatchSource(taskID, total, batchSize)
-	processor := NewBatchProcessor(taskID, bm)
-	sink := NewBatchSink(taskID, bm, total, jobID)
+	// 处理数据层转换任务
+	return bm.processDataLayerTask(ctx, jobID, taskID, params)
+}
 
-	// 启动 sink
-	sink.Start(ctx)
+// processDataLayerTask 处理数据层转换任务，使用FSM
+func (bm *BatchManager) processDataLayerTask(ctx context.Context, jobID, taskID string, params map[string]interface{}) error {
+	log.Infow("Processing data layer task with FSM", "taskID", taskID, "jobID", jobID)
 
-	// 构建数据流管道：Source -> Processor -> Sink
-	// 连接 source 到 processor
-	go func() {
-		source.generate()
-		for item := range source.Out() {
-			processor.In() <- item
-		}
-		close(processor.In())
-	}()
+	// 获取作业信息
+	whereOpts := where.F("job_id", jobID)
+	job, err := bm.store.Job().Get(ctx, whereOpts)
+	if err != nil {
+		return fmt.Errorf("failed to get job: %w", err)
+	}
 
-	// 连接 processor 到 sink
-	processor.To(sink)
+	// 必须有数据层处理器工厂才能处理
+	if bm.dataLayerProcessorFactory == nil {
+		return fmt.Errorf("data layer processor factory not set")
+	}
 
-	log.Infow("Batch processing pipeline started", "taskID", taskID, "jobID", jobID, "total", total, "batchSize", batchSize)
-	return nil
+	// 创建数据层处理器
+	processor := bm.dataLayerProcessorFactory(ctx, job, bm.db)
+	defer processor.Stop()
+
+	log.Infow("Created DataLayerProcessor, starting FSM processing", "taskID", taskID, "job_id", job.JobID)
+
+	// 启动FSM处理
+	if err := processor.Process(); err != nil {
+		log.Errorw("FSM processing failed", "taskID", taskID, "error", err)
+		return bm.updateJobStatus(ctx, job.JobID, taskID, BatchTaskStatusFailed, 0, nil, err.Error())
+	}
+
+	// 完成处理
+	result := map[string]interface{}{
+		"status":      "completed",
+		"method":      "FSM",
+		"output_path": fmt.Sprintf("data-layer-results/%s/output.json", taskID),
+	}
+
+	return bm.updateJobStatus(ctx, job.JobID, taskID, BatchTaskStatusCompleted, 100.0, result, "")
 }
 
 // GetTaskStatus 获取任务状态
@@ -148,235 +170,6 @@ func (bm *BatchManager) GetTaskStatus(ctx context.Context, taskID string) (*Batc
 	}
 
 	return &task, nil
-}
-
-// BatchItem 表示批处理的数据项
-type BatchItem struct {
-	ID        int64                  `json:"id"`
-	Data      map[string]interface{} `json:"data"`
-	Timestamp int64                  `json:"timestamp"`
-}
-
-// BatchSource 实现 streams.Source 接口，用于生成批处理数据
-type BatchSource struct {
-	total     int64
-	current   int64
-	mu        sync.Mutex
-	taskID    string
-	batchSize int64
-	out       chan interface{}
-}
-
-// NewBatchSource 创建新的批处理数据源
-func NewBatchSource(taskID string, total, batchSize int64) *BatchSource {
-	return &BatchSource{
-		total:     total,
-		current:   0,
-		taskID:    taskID,
-		batchSize: batchSize,
-		out:       make(chan interface{}, batchSize),
-	}
-}
-
-// Out 实现 streams.Outlet 接口
-func (bs *BatchSource) Out() <-chan interface{} {
-	return bs.out
-}
-
-// Via 实现 streams.Source 接口
-func (bs *BatchSource) Via(flow streams.Flow) streams.Flow {
-	go bs.generate()
-	return flow
-}
-
-// generate 生成批处理数据
-func (bs *BatchSource) generate() {
-	defer close(bs.out)
-
-	for bs.current < bs.total {
-		bs.mu.Lock()
-		if bs.current >= bs.total {
-			bs.mu.Unlock()
-			break
-		}
-
-		item := &BatchItem{
-			ID: bs.current,
-			Data: map[string]interface{}{
-				"value":     fmt.Sprintf("item_%d", bs.current),
-				"task_id":   bs.taskID,
-				"batch_num": bs.current / bs.batchSize,
-			},
-			Timestamp: time.Now().Unix(),
-		}
-
-		bs.current++
-		bs.mu.Unlock()
-
-		bs.out <- item
-	}
-}
-
-// BatchProcessor 实现 streams.Flow 接口，用于处理批处理数据
-type BatchProcessor struct {
-	taskID string
-	bm     *BatchManager
-	in     chan interface{}
-	out    chan interface{}
-}
-
-// NewBatchProcessor 创建新的批处理处理器
-func NewBatchProcessor(taskID string, bm *BatchManager) *BatchProcessor {
-	return &BatchProcessor{
-		taskID: taskID,
-		bm:     bm,
-		in:     make(chan interface{}, 100),
-		out:    make(chan interface{}, 100),
-	}
-}
-
-// In 实现 streams.Inlet 接口
-func (bp *BatchProcessor) In() chan<- interface{} {
-	return bp.in
-}
-
-// Out 实现 streams.Outlet 接口
-func (bp *BatchProcessor) Out() <-chan interface{} {
-	return bp.out
-}
-
-// Via 实现 streams.Flow 接口
-func (bp *BatchProcessor) Via(flow streams.Flow) streams.Flow {
-	go bp.process()
-	return flow
-}
-
-// To 实现 streams.Flow 接口
-func (bp *BatchProcessor) To(sink streams.Sink) {
-	go bp.process()
-
-	// 将输出传递给 sink
-	go func() {
-		for item := range bp.out {
-			sink.In() <- item
-		}
-		close(sink.In())
-	}()
-}
-
-// process 处理数据
-func (bp *BatchProcessor) process() {
-	defer close(bp.out)
-
-	for item := range bp.in {
-		if batchItem, ok := item.(*BatchItem); ok {
-			// 模拟数据处理
-			time.Sleep(10 * time.Millisecond)
-
-			// 处理数据
-			processedItem := &BatchItem{
-				ID: batchItem.ID,
-				Data: map[string]interface{}{
-					"original":     batchItem.Data,
-					"processed_at": time.Now().Unix(),
-					"status":       "processed",
-				},
-				Timestamp: time.Now().Unix(),
-			}
-
-			bp.out <- processedItem
-		}
-	}
-}
-
-// BatchSink 实现 streams.Sink 接口，用于收集批处理结果
-type BatchSink struct {
-	in        chan interface{}
-	taskID    string
-	bm        *BatchManager
-	results   []interface{}
-	mu        sync.Mutex
-	total     int64
-	processed int64
-	ctx       context.Context
-	jobID     string
-}
-
-// NewBatchSink 创建新的批处理结果收集器
-func NewBatchSink(taskID string, bm *BatchManager, total int64, jobID string) *BatchSink {
-	return &BatchSink{
-		in:        make(chan interface{}, 100),
-		taskID:    taskID,
-		bm:        bm,
-		results:   make([]interface{}, 0),
-		total:     total,
-		processed: 0,
-		jobID:     jobID,
-	}
-}
-
-// In 实现 streams.Sink 接口
-func (bs *BatchSink) In() chan<- interface{} {
-	return bs.in
-}
-
-// Start 启动 sink 处理
-func (bs *BatchSink) Start(ctx context.Context) {
-	bs.ctx = ctx
-	go bs.consume()
-}
-
-// consume 消费数据
-func (bs *BatchSink) consume() {
-	for item := range bs.in {
-		bs.mu.Lock()
-		bs.results = append(bs.results, item)
-		bs.processed++
-
-		progress := float32(bs.processed) / float32(bs.total) * 100
-
-		// 更新任务状态
-		result := map[string]interface{}{
-			"total":     bs.total,
-			"processed": bs.processed,
-			"progress":  progress,
-		}
-
-		bs.bm.updateJobStatus(bs.ctx, bs.jobID, bs.taskID, BatchTaskStatusProcessing, progress, result, "")
-		bs.mu.Unlock()
-
-		// 每处理100个项目记录一次日志
-		if bs.processed%100 == 0 {
-			log.Infow("Batch processing progress", "taskID", bs.taskID, "processed", bs.processed, "total", bs.total, "progress", progress)
-		}
-	}
-
-	// 处理完成
-	bs.mu.Lock()
-	result := map[string]interface{}{
-		"total":       bs.total,
-		"processed":   bs.processed,
-		"progress":    100.0,
-		"status":      "completed",
-		"output_path": fmt.Sprintf("batch-results/%s/output.json", bs.taskID),
-	}
-
-	// 将结果写入 MinIO
-	resultLines := make([]string, len(bs.results))
-	for i, item := range bs.results {
-		data, _ := json.Marshal(item)
-		resultLines[i] = string(data)
-	}
-
-	if err := bs.bm.minio.Write(bs.ctx, result["output_path"].(string), resultLines); err != nil {
-		log.Errorw("Failed to write result to MinIO", "taskID", bs.taskID, "error", err)
-		bs.bm.updateJobStatus(bs.ctx, bs.jobID, bs.taskID, BatchTaskStatusFailed, 100.0, nil, err.Error())
-	} else {
-		bs.bm.updateJobStatus(bs.ctx, bs.jobID, bs.taskID, BatchTaskStatusCompleted, 100.0, result, "")
-	}
-	bs.mu.Unlock()
-
-	log.Infow("Batch processing completed", "taskID", bs.taskID, "total", bs.total, "processed", bs.processed)
 }
 
 // updateJobStatus 更新作业状态

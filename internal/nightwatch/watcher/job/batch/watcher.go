@@ -32,7 +32,7 @@ type Watcher struct {
 
 // Run executes the watcher logic to process batch jobs.
 func (w *Watcher) Run() {
-	// Define the phases that the watcher can handle.
+	// Define the phases that the watcher can handle - only data layer processing
 	runablePhase := []string{
 		known.DataLayerPending,
 		known.DataLayerLandingToODS,
@@ -40,8 +40,6 @@ func (w *Watcher) Run() {
 		known.DataLayerDWDToDWS,
 		known.DataLayerDWSToDS,
 		known.DataLayerCompleted,
-		known.JobPending,
-		known.JobRunning,
 	}
 
 	_, jobs, err := w.Store.Job().List(context.Background(), where.F(
@@ -65,11 +63,11 @@ func (w *Watcher) Run() {
 	wp := workerpool.New(int(w.MaxWorkers))
 	for _, job := range jobs {
 		ctx := context.Background()
-		log.Infow("Start to process batch job", "job_id", job.JobID, "status", job.Status)
+		log.Infow("Start to process data layer job", "job_id", job.JobID, "status", job.Status)
 
 		wp.Submit(func() {
-			if err := w.processJob(ctx, job); err != nil {
-				log.Errorw("Failed to process batch job", "job_id", job.JobID, "error", err)
+			if err := w.processDataLayerJob(ctx, job); err != nil {
+				log.Errorw("Failed to process data layer job", "job_id", job.JobID, "error", err)
 				return
 			}
 		})
@@ -78,28 +76,7 @@ func (w *Watcher) Run() {
 	wp.StopWait()
 }
 
-// processJob processes a single batch job.
-func (w *Watcher) processJob(ctx context.Context, job *model.JobM) error {
-	// Check if the job is a data layer processing job
-	if w.isDataLayerJob(job) {
-		return w.processDataLayerJob(ctx, job)
-	}
-
-	return w.processSimpleBatchJob(ctx, job)
-}
-
-// isDataLayerJob checks if the job requires data layer processing.
-func (w *Watcher) isDataLayerJob(job *model.JobM) bool {
-	// Check if the job status indicates data layer processing
-	return job.Status == known.DataLayerPending ||
-		job.Status == known.DataLayerLandingToODS ||
-		job.Status == known.DataLayerODSToDWD ||
-		job.Status == known.DataLayerDWDToDWS ||
-		job.Status == known.DataLayerDWSToDS ||
-		job.Status == known.DataLayerCompleted
-}
-
-// processDataLayerJob processes a batch job with data layer transformations using async task creation.
+// processJob processes a single batch job - only data layer processing
 func (w *Watcher) processDataLayerJob(ctx context.Context, job *model.JobM) error {
 	log.Infow("Processing data layer job", "job_id", job.JobID, "status", job.Status)
 
@@ -113,7 +90,6 @@ func (w *Watcher) processDataLayerJob(ctx context.Context, job *model.JobM) erro
 	// Function to create the data layer processing task
 	createDataLayerTaskFunc := func() error {
 		params := map[string]interface{}{
-			"type":       "data_layer",
 			"batch_size": known.DataLayerBatchSize,
 			"timeout":    known.DataLayerProcessTimeout,
 			"retries":    3,
@@ -154,61 +130,6 @@ func (w *Watcher) processDataLayerJob(ctx context.Context, job *model.JobM) erro
 	return w.Store.Job().Update(ctx, job)
 }
 
-// processSimpleBatchJob processes a simple batch job using async task creation.
-func (w *Watcher) processSimpleBatchJob(ctx context.Context, job *model.JobM) error {
-	log.Infow("Processing simple batch job", "job_id", job.JobID, "status", job.Status)
-
-	// Initialize job results if they are not already set
-	if job.Results == nil || job.Results.Batch == nil {
-		job.Results = &model.JobResults{Batch: &v1.BatchResults{}}
-	}
-
-	results := job.Results.Batch
-
-	// Function to create the simple batch processing task
-	createSimpleBatchTaskFunc := func() error {
-		params := map[string]interface{}{
-			"type":       "simple_batch",
-			"batch_size": known.BatchJobDefaultConcurrency,
-			"timeout":    known.DataLayerProcessTimeout,
-			"retries":    3,
-			"concurrent": known.BatchJobMaxWorkers,
-			"total":      int64(500), // 可以根据实际需要调整
-		}
-
-		taskID, err := w.BatchManager.CreateTask(ctx, job.JobID, params)
-		if err != nil {
-			return err
-		}
-		results.TaskID = &taskID
-		return nil
-	}
-
-	// Create task if it hasn't been created yet
-	if results.TaskID == nil {
-		if err := createSimpleBatchTaskFunc(); err != nil {
-			return err
-		}
-	}
-
-	// Check task status
-	task, err := w.BatchManager.GetTaskStatus(ctx, *results.TaskID)
-	if err != nil {
-		log.Errorw("Failed to get task status", "task_id", *results.TaskID, "error", err)
-		return err
-	}
-
-	if task.Status != batchclient.BatchTaskStatusCompleted {
-		log.Infow("Simple batch task has not been completed", "task_id", *results.TaskID, "status", task.Status, "progress", task.Progress)
-		// Keep current status, will be checked again in next cycle
-		return nil
-	}
-
-	// Task completed, update job status
-	job.Status = known.JobSucceeded
-	return w.Store.Job().Update(ctx, job)
-}
-
 // Spec returns the cron job specification for scheduling.
 func (w *Watcher) Spec() string {
 	return "@every 10s"
@@ -218,7 +139,12 @@ func (w *Watcher) Spec() string {
 func (w *Watcher) SetAggregateConfig(config *watcher.AggregateConfig) {
 	w.Store = config.Store
 	w.DB = config.DB
-	w.BatchManager = batchclient.NewBatchManager(config.Store, config.Minio)
+	w.BatchManager = batchclient.NewBatchManager(config.Store, config.Minio, config.DB)
+
+	// 设置数据层处理器工厂，使用真正的NewDataLayerProcessor
+	w.BatchManager.SetDataLayerProcessorFactory(func(ctx context.Context, job *model.JobM, db *gorm.DB) batchclient.DataLayerProcessor {
+		return NewDataLayerProcessor(ctx, job, db)
+	})
 }
 
 // SetMaxWorkers sets the maximum number of concurrent workers for the watcher.

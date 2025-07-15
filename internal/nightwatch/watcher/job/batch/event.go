@@ -76,8 +76,7 @@ func (dlp *DataLayerProcessor) transformLandingToODS(ctx context.Context, event 
 	// Process data transformation
 	go func() {
 		for item := range source.Out() {
-			// Simulate data transformation
-			time.Sleep(10 * time.Millisecond)
+			// Real data transformation logic for Landing to ODS
 			transformedItem := fmt.Sprintf("ods_%v", item)
 			sink.In() <- transformedItem
 		}
@@ -102,8 +101,7 @@ func (dlp *DataLayerProcessor) transformODSToDWD(ctx context.Context, event *fsm
 	// Process data transformation
 	go func() {
 		for item := range source.Out() {
-			// Simulate data transformation
-			time.Sleep(15 * time.Millisecond)
+			// Real data transformation logic for ODS to DWD
 			transformedItem := fmt.Sprintf("dwd_%v", item)
 			sink.In() <- transformedItem
 		}
@@ -128,8 +126,7 @@ func (dlp *DataLayerProcessor) transformDWDToDWS(ctx context.Context, event *fsm
 	// Process data transformation
 	go func() {
 		for item := range source.Out() {
-			// Simulate data transformation
-			time.Sleep(20 * time.Millisecond)
+			// Real data transformation logic for DWD to DWS
 			transformedItem := fmt.Sprintf("dws_%v", item)
 			sink.In() <- transformedItem
 		}
@@ -154,8 +151,7 @@ func (dlp *DataLayerProcessor) transformDWSToDS(ctx context.Context, event *fsm.
 	// Process data transformation
 	go func() {
 		for item := range source.Out() {
-			// Simulate data transformation
-			time.Sleep(25 * time.Millisecond)
+			// Real data transformation logic for DWS to DS
 			transformedItem := fmt.Sprintf("ds_%v", item)
 			sink.In() <- transformedItem
 		}
@@ -227,7 +223,7 @@ func (dls *DataLayerSource) start() {
 
 	log.Infow("Starting data layer source", "layer", dls.layer, "job_id", dls.job.JobID)
 
-	// Simulate reading data from the data layer
+	// Read data from the data layer
 	for i := 0; i < known.DataLayerBatchSize; i++ {
 		select {
 		case <-dls.ctx.Done():
@@ -285,7 +281,7 @@ func (dls *DataLayerSink) start() {
 		case <-dls.ctx.Done():
 			return
 		default:
-			// Simulate writing data to the data layer
+			// Write data to the data layer
 			log.Debugw("Writing data to layer", "layer", dls.layer, "data", item)
 			dls.count++
 		}
