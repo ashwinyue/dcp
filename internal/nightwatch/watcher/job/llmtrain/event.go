@@ -1,36 +1,35 @@
 package llmtrain
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"github.com/looplab/fsm"
+	"k8s.io/utils/ptr"
+
+	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
+	jobconditionsutil "github.com/ashwinyue/dcp/internal/pkg/util/jobconditions"
+	v1 "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1"
 )
 
-// Download handles the download event for LLM training jobs.
-func (sm *StateMachine) Download() error {
-	log.Infow("Processing download event", "jobID", sm.job.JobID)
+// Download retrieves feedback data from VOC and saves it to TOS.
+func (sm *StateMachine) Download(ctx context.Context, event *fsm.Event) error {
+	// Set default job params.
+	SetDefaultJobParams(sm.Job)
 
-	// Check if job should be skipped based on idempotency
-	if ShouldSkipOnIdempotency(sm.ctx, sm.store, sm.job) {
-		log.Infow("Skipping job due to idempotency", "jobID", sm.job.JobID)
+	// Skip the download if the operation has already been performed (idempotency check)
+	if ShouldSkipOnIdempotency(sm.Job, event.FSM.Current()) {
 		return nil
 	}
 
-	// Check for timeout
-	if isJobTimeout(sm.job, known.LLMTrainTimeout) {
-		log.Warnw("Job timeout detected", "jobID", sm.job.JobID)
-		return sm.handleJobFailure("Job timeout during download")
-	}
+	time.Sleep(2 * time.Second)
 
-	// Set default job parameters
-	SetDefaultJobParams(sm.job)
-
-	// Update job status to downloading
-	sm.job.Status = known.LLMTrainDownloading
-	if err := sm.updateJobStatus(); err != nil {
-		return fmt.Errorf("failed to update job status to downloading: %w", err)
+	// Initialize job results if they are not already set
+	if sm.Job.Results == nil || sm.Job.Results.Train == nil {
+		sm.Job.Results = &model.JobResults{Train: &v1.TrainResults{}}
 	}
 
 	// TODO: Implement actual download logic here
@@ -39,38 +38,24 @@ func (sm *StateMachine) Download() error {
 	// 2. Validating downloaded data
 	// 3. Storing data in appropriate location
 
-	// Simulate download process
-	time.Sleep(100 * time.Millisecond)
+	// Simulate data download
+	dataPath := fmt.Sprintf("job-%s-data.json", sm.Job.JobID)
+	sm.Job.Results.Train.DataPath = &dataPath
 
-	// Update job status to downloaded
-	sm.job.Status = known.LLMTrainDownloaded
-	if err := sm.updateJobStatus(); err != nil {
-		return fmt.Errorf("failed to update job status to downloaded: %w", err)
-	}
-
-	log.Infow("Download completed successfully", "jobID", sm.job.JobID)
+	sm.Job.Conditions = jobconditionsutil.Set(sm.Job.Conditions, jobconditionsutil.TrueCondition(event.FSM.Current()))
 	return nil
 }
 
-// Embedding handles the embedding event for LLM training jobs.
-func (sm *StateMachine) Embedding() error {
-	log.Infow("Processing embedding event", "jobID", sm.job.JobID)
-
-	// Check for timeout
-	if isJobTimeout(sm.job, known.LLMTrainTimeout) {
-		log.Warnw("Job timeout detected", "jobID", sm.job.JobID)
-		return sm.handleJobFailure("Job timeout during embedding")
+// Embedding embedding daily estimation data.
+func (sm *StateMachine) Embedding(ctx context.Context, event *fsm.Event) error {
+	if ShouldSkipOnIdempotency(sm.Job, event.FSM.Current()) {
+		return nil
 	}
 
-	// Update job status to embedding
-	sm.job.Status = known.LLMTrainEmbedding
-	if err := sm.updateJobStatus(); err != nil {
-		return fmt.Errorf("failed to update job status to embedding: %w", err)
-	}
+	results := sm.Job.Results.Train
 
-	// Build embedder inputs
-	inputs := buildEmbedderInputs(sm.job)
-	log.Infow("Built embedder inputs", "jobID", sm.job.JobID, "inputCount", len(inputs))
+	// Simulate embedding process with rate limiting
+	_ = sm.Watcher.Limiter.Embedding.Take()
 
 	// TODO: Implement actual embedding logic here
 	// This would typically involve:
@@ -78,34 +63,42 @@ func (sm *StateMachine) Embedding() error {
 	// 2. Generating vector embeddings
 	// 3. Storing embeddings for training use
 
-	// Simulate embedding process with QPS control
-	embeddingDelay := time.Duration(1000/known.LLMTrainEmbeddingQPS) * time.Millisecond
-	time.Sleep(embeddingDelay)
+	// Simulate embedding process
+	time.Sleep(time.Second)
 
-	// Update job status to embedded
-	sm.job.Status = known.LLMTrainEmbedded
-	if err := sm.updateJobStatus(); err != nil {
-		return fmt.Errorf("failed to update job status to embedded: %w", err)
-	}
+	// Update results and write the embedded data
+	embeddedDataPath := fmt.Sprintf("job-%s-embedded.json", sm.Job.JobID)
+	results.EmbeddedDataPath = ptr.To(embeddedDataPath)
 
-	log.Infow("Embedding completed successfully", "jobID", sm.job.JobID)
+	results.TaskID = nil
+	jobconditionsutil.Delete(sm.Job.Conditions, known.LLMTrainTrained)
+
+	sm.Job.Conditions = jobconditionsutil.Set(sm.Job.Conditions, jobconditionsutil.TrueCondition(event.FSM.Current()))
 	return nil
 }
 
-// Train handles the training event for LLM training jobs.
-func (sm *StateMachine) Train() error {
-	log.Infow("Processing training event", "jobID", sm.job.JobID)
-
-	// Check for timeout
-	if isJobTimeout(sm.job, known.LLMTrainTimeout) {
-		log.Warnw("Job timeout detected", "jobID", sm.job.JobID)
-		return sm.handleJobFailure("Job timeout during training")
+func (sm *StateMachine) Train(ctx context.Context, event *fsm.Event) error {
+	if ShouldSkipOnIdempotency(sm.Job, event.FSM.Current()) {
+		return nil
 	}
 
-	// Update job status to training
-	sm.job.Status = known.LLMTrainTraining
-	if err := sm.updateJobStatus(); err != nil {
-		return fmt.Errorf("failed to update job status to training: %w", err)
+	results := sm.Job.Results.Train
+	_ = sm.Watcher.Limiter.Train.Take() // Rate limiting
+
+	// Function to create the training task
+	createTrainTaskFunc := func() error {
+		resultPath := fmt.Sprintf("job-%s-result.json", sm.Job.JobID)
+		taskID := fmt.Sprintf("task-%s", sm.Job.JobID)
+		results.TaskID = &taskID
+		results.ResultPath = &resultPath
+		return nil
+	}
+
+	// Create task if it hasn't been created yet
+	if results.TaskID == nil {
+		if err := createTrainTaskFunc(); err != nil {
+			return err
+		}
 	}
 
 	// TODO: Implement actual training logic here
@@ -117,48 +110,41 @@ func (sm *StateMachine) Train() error {
 	// 5. Saving trained model
 
 	// Simulate training process
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(time.Second)
 
-	// Update job status to trained
-	sm.job.Status = known.LLMTrainTrained
-	if err := sm.updateJobStatus(); err != nil {
-		return fmt.Errorf("failed to update job status to trained: %w", err)
-	}
-
-	// Finally, mark as succeeded
-	sm.job.Status = known.LLMTrainSucceeded
-	if err := sm.updateJobStatus(); err != nil {
-		return fmt.Errorf("failed to update job status to succeeded: %w", err)
-	}
-
-	log.Infow("Training completed successfully", "jobID", sm.job.JobID)
+	sm.Job.Conditions = jobconditionsutil.Set(sm.Job.Conditions, jobconditionsutil.TrueCondition(event.FSM.Current()))
 	return nil
 }
 
-// EnterState handles state transitions and updates job status.
-func (sm *StateMachine) EnterState(state string) {
-	log.Infow("Entering state", "jobID", sm.job.JobID, "state", state)
+// EnterState handles the state transition of the state machine
+// and updates the Job's status and conditions based on the event.
+func (sm *StateMachine) EnterState(ctx context.Context, event *fsm.Event) error {
+	sm.Job.Status = event.FSM.Current()
 
-	// Update job status
-	sm.job.Status = state
-	if err := sm.updateJobStatus(); err != nil {
-		log.Errorw("Failed to update job status during state transition", "jobID", sm.job.JobID, "state", state, "error", err)
-	}
-}
-
-// updateJobStatus updates the job status in the store.
-func (sm *StateMachine) updateJobStatus() error {
-	return sm.store.Job().Update(sm.ctx, sm.job)
-}
-
-// handleJobFailure handles job failure scenarios.
-func (sm *StateMachine) handleJobFailure(reason string) error {
-	log.Errorw("Job failed", "jobID", sm.job.JobID, "reason", reason)
-
-	sm.job.Status = known.LLMTrainFailed
-	if err := sm.updateJobStatus(); err != nil {
-		return fmt.Errorf("failed to update job status to failed: %w", err)
+	// Record the start time of the job
+	if sm.Job.Status == known.LLMTrainDownloading {
+		sm.Job.StartedAt = time.Now()
 	}
 
-	return fmt.Errorf("job failed: %s", reason)
+	// Unified handling logic for Job failure
+	if event.Err != nil || isJobTimeout(sm.Job) {
+		sm.Job.Status = known.LLMTrainFailed
+		sm.Job.EndedAt = time.Now()
+
+		var cond *v1.JobCondition
+		if isJobTimeout(sm.Job) {
+			log.Infow("LLM train task timeout")
+			cond = jobconditionsutil.FalseCondition(event.FSM.Current(), fmt.Sprintf("LLM train task exceeded timeout seconds"))
+		} else {
+			cond = jobconditionsutil.FalseCondition(event.FSM.Current(), event.Err.Error())
+		}
+
+		sm.Job.Conditions = jobconditionsutil.Set(sm.Job.Conditions, cond)
+	}
+
+	if err := sm.Watcher.Store.Job().Update(ctx, sm.Job); err != nil {
+		return err
+	}
+
+	return nil
 }

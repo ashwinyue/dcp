@@ -3,89 +3,98 @@ package llmtrain
 import (
 	"context"
 
+	"github.com/gammazero/workerpool"
 	"github.com/onexstack/onexstack/pkg/store/where"
 	"github.com/onexstack/onexstack/pkg/watch/registry"
+	"go.uber.org/ratelimit"
 
-	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
+	"github.com/ashwinyue/dcp/internal/nightwatch/watcher"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
 )
 
-// Watcher is responsible for monitoring and processing daily estimation jobs.
-type Watcher struct {
-	store      store.IStore
-	maxWorkers int
+// Ensure Watcher implements the registry.Watcher interface.
+var _ registry.Watcher = (*Watcher)(nil)
+
+// Limiter holds rate limiters for different operations.
+type Limiter struct {
+	Embedding ratelimit.Limiter
+	Train     ratelimit.Limiter
 }
 
-// Run implements the registry.Watcher interface.
-func (w *Watcher) Run() {
-	ctx := context.Background()
-	log.Infow("Starting LLM train watcher")
+// Watcher monitors and processes daily estimation jobs.
+type Watcher struct {
+	Store store.IStore
 
-	// Query for pending LLM train jobs
-	_, jobs, err := w.store.Job().List(ctx, where.NewWhere())
+	// Maximum number of concurrent workers.
+	MaxWorkers int64
+	// Rate limiters for operations.
+	Limiter Limiter
+}
+
+// Run executes the watcher logic to process jobs.
+func (w *Watcher) Run() {
+	// Define the phases that the watcher can handle.
+	runablePhase := []string{
+		known.LLMTrainPending,
+		known.LLMTrainDownloading,
+		known.LLMTrainDownloaded,
+		known.LLMTrainEmbedding,
+		known.LLMTrainEmbedded,
+		known.LLMTrainTraining,
+		known.LLMTrainTrained,
+	}
+
+	_, jobs, err := w.Store.Job().List(context.Background(), where.F(
+		"scope", known.LLMJobScope,
+		"watcher", known.LLMTrainWatcher,
+		"status", runablePhase,
+		"suspend", known.JobNonSuspended,
+	))
 	if err != nil {
-		log.Errorw("Failed to list pending LLM train jobs", "error", err)
+		log.Errorw("Failed to get runnable jobs", "error", err)
 		return
 	}
 
-	log.Infow("Found pending LLM train jobs", "count", len(jobs))
-
-	// Process each job
+	wp := workerpool.New(int(w.MaxWorkers))
 	for _, job := range jobs {
-		if err := w.processJob(ctx, job); err != nil {
-			log.Errorw("Failed to process LLM train job", "jobID", job.JobID, "error", err)
-			continue
-		}
+		//ctx := log.WithContext(context.Background(), "run_id", uuid.New().String(), "watcher", job.Watcher, "job_id", job.JobID)
+		ctx := context.Background()
+		log.Infow("Start to train llm model")
+
+		wp.Submit(func() {
+			sm := NewStateMachine(job.Status, w, job)
+			if err := sm.FSM.Event(ctx, job.Status); err != nil {
+				return
+			}
+		})
 	}
+
+	wp.StopWait()
 }
 
-// processJob processes a single LLM train job using state machine.
-func (w *Watcher) processJob(ctx context.Context, job *model.JobM) error {
-	log.Infow("Processing LLM train job", "jobID", job.JobID, "status", job.Status)
-
-	// Create state machine for this job
-	sm := NewStateMachine(ctx, w.store, job)
-
-	// Process the job based on current status
-	switch job.Status {
-	case known.LLMTrainPending:
-		return sm.Download()
-	case known.LLMTrainDownloaded:
-		return sm.Embedding()
-	case known.LLMTrainEmbedded:
-		return sm.Train()
-	default:
-		log.Infow("Job status does not require processing", "jobID", job.JobID, "status", job.Status)
-		return nil
-	}
-}
-
-// Spec returns the cron specification for this watcher.
+// Spec returns the cron job specification for scheduling.
 func (w *Watcher) Spec() string {
-	// Run every 30 seconds
-	return "*/30 * * * * *"
+	return "@every 1s"
 }
 
-// SetStore sets the store for the watcher.
-func (w *Watcher) SetStore(store store.IStore) {
-	w.store = store
+// SetAggregateConfig configures the watcher with the provided aggregate configuration.
+func (w *Watcher) SetAggregateConfig(config *watcher.AggregateConfig) {
+	w.Store = config.Store
+	w.Limiter = Limiter{
+		Embedding: ratelimit.New(known.LLMTrainEmbeddingQPS),
+		Train:     ratelimit.New(known.LLMTrainEvaluateQPS),
+	}
 }
 
-// SetMaxWorkers sets the maximum number of workers for the watcher.
-func (w *Watcher) SetMaxWorkers(maxWorkers int) {
-	w.maxWorkers = maxWorkers
+// SetMaxWorkers sets the maximum number of concurrent workers for the watcher.
+func (w *Watcher) SetMaxWorkers(maxWorkers int64) {
+	// Since the daily accuracy evaluation task needs to call the embedding model, a custom
+	// maxWorkers setting is used here to reduce the pressure on the embedding model.
+	w.MaxWorkers = known.LLMTrainMaxWorkers
 }
 
-// GetMaxWorkers returns the maximum number of workers.
-func (w *Watcher) GetMaxWorkers() int {
-	return w.maxWorkers
-}
-
-// init registers the watcher with the registry.
 func init() {
-	registry.Register(known.LLMTrainWatcher, &Watcher{
-		maxWorkers: known.LLMTrainMaxWorkers,
-	})
+	registry.Register(known.LLMTrainWatcher, &Watcher{})
 }

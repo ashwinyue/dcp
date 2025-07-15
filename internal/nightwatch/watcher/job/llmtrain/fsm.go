@@ -1,48 +1,45 @@
 package llmtrain
 
 import (
-	"context"
-
 	"github.com/looplab/fsm"
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
-	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
+	fsmutil "github.com/ashwinyue/dcp/internal/pkg/util/fsm"
 )
 
-// StateMachine represents the finite state machine for LLM training jobs.
+// StateMachine represents a finite state machine for managing daily estimation jobs.
 type StateMachine struct {
-	ctx   context.Context
-	store store.IStore
-	job   *model.JobM
-	fsm   *fsm.FSM
+	Watcher *Watcher
+	Job     *model.JobM
+	FSM     *fsm.FSM
 }
 
-// NewStateMachine creates a new state machine for LLM training jobs.
-func NewStateMachine(ctx context.Context, store store.IStore, job *model.JobM) *StateMachine {
-	sm := &StateMachine{
-		ctx:   ctx,
-		store: store,
-		job:   job,
-	}
+// NewStateMachine initializes a new StateMachine with the given initial state, watcher, and job.
+// It configures the FSM with defined events and their corresponding state transitions,
+// as well as callbacks for entering specific states.
+func NewStateMachine(initial string, watcher *Watcher, job *model.JobM) *StateMachine {
+	sm := &StateMachine{Watcher: watcher, Job: job}
 
-	// Define the finite state machine
-	sm.fsm = fsm.NewFSM(
-		job.Status,
+	sm.FSM = fsm.NewFSM(
+		initial,
 		fsm.Events{
-			{Name: "download", Src: []string{known.LLMTrainPending}, Dst: known.LLMTrainDownloading},
-			{Name: "downloaded", Src: []string{known.LLMTrainDownloading}, Dst: known.LLMTrainDownloaded},
-			{Name: "embedding", Src: []string{known.LLMTrainDownloaded}, Dst: known.LLMTrainEmbedding},
-			{Name: "embedded", Src: []string{known.LLMTrainEmbedding}, Dst: known.LLMTrainEmbedded},
-			{Name: "training", Src: []string{known.LLMTrainEmbedded}, Dst: known.LLMTrainTraining},
-			{Name: "trained", Src: []string{known.LLMTrainTraining}, Dst: known.LLMTrainTrained},
-			{Name: "succeed", Src: []string{known.LLMTrainTrained}, Dst: known.LLMTrainSucceeded},
-			{Name: "fail", Src: []string{known.LLMTrainPending, known.LLMTrainDownloading, known.LLMTrainDownloaded, known.LLMTrainEmbedding, known.LLMTrainEmbedded, known.LLMTrainTraining, known.LLMTrainTrained}, Dst: known.LLMTrainFailed},
+			// Define state transitions for the daily estimation process.
+			{Name: known.LLMTrainPending, Src: []string{known.LLMTrainPending}, Dst: known.LLMTrainDownloading},
+			{Name: known.LLMTrainDownloading, Src: []string{known.LLMTrainDownloading}, Dst: known.LLMTrainDownloaded},
+			{Name: known.LLMTrainDownloaded, Src: []string{known.LLMTrainDownloaded}, Dst: known.LLMTrainEmbedding},
+			{Name: known.LLMTrainEmbedding, Src: []string{known.LLMTrainEmbedding}, Dst: known.LLMTrainEmbedded},
+			{Name: known.LLMTrainEmbedded, Src: []string{known.LLMTrainEmbedded}, Dst: known.LLMTrainTraining},
+			{Name: known.LLMTrainTraining, Src: []string{known.LLMTrainTraining}, Dst: known.LLMTrainTrained},
+			{Name: known.LLMTrainTrained, Src: []string{known.LLMTrainTrained}, Dst: known.LLMTrainSucceeded},
 		},
 		fsm.Callbacks{
-			"enter_state": func(ctx context.Context, e *fsm.Event) {
-				sm.EnterState(e.Dst)
-			},
+			// enter_state 先于 enter_xxx 执行。此时：event=Pending, current=Downloading
+			"enter_state": fsmutil.WrapEvent(sm.EnterState),
+			// 此时 event = Downloading，current = Downloaded
+			"enter_" + known.LLMTrainDownloaded: fsmutil.WrapEvent(sm.Download),
+			"enter_" + known.LLMTrainEmbedded:   fsmutil.WrapEvent(sm.Embedding),
+			"enter_" + known.LLMTrainTrained:    fsmutil.WrapEvent(sm.Train),
 		},
 	)
 

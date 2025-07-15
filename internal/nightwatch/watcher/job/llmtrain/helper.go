@@ -1,125 +1,44 @@
 package llmtrain
 
 import (
-	"context"
-	"fmt"
 	"time"
 
-	"github.com/onexstack/onexstack/pkg/store/where"
-
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
-	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
-	"github.com/ashwinyue/dcp/internal/pkg/log"
+	jobconditionsutil "github.com/ashwinyue/dcp/internal/pkg/util/jobconditions"
+	v1 "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1"
 )
 
-// isJobTimeout checks if a job has exceeded the specified timeout duration.
-func isJobTimeout(job *model.JobM, timeoutSeconds int) bool {
-	if job.CreatedAt.IsZero() {
+// isJobTimeout checks if the job has exceeded its allowed execution time.
+func isJobTimeout(job *model.JobM) bool {
+	duration := time.Now().Unix() - job.StartedAt.Unix()
+	timeout := job.Params.Train.JobTimeout
+	if timeout == 0 {
+		timeout = int64(known.LLMTrainTimeout)
+	}
+
+	return duration > timeout
+}
+
+// ShouldSkipOnIdempotency determines whether a job should skip execution based on idempotency conditions.
+func ShouldSkipOnIdempotency(job *model.JobM, condType string) bool {
+	// If idempotent execution is not set, allow execution regardless of conditions.
+	if job.Params.Train.IdempotentExecution != known.IdempotentExecution {
 		return false
 	}
 
-	timeout := time.Duration(timeoutSeconds) * time.Second
-	return time.Since(job.CreatedAt) > timeout
+	return jobconditionsutil.IsTrue(job.Conditions, condType)
 }
 
-// ShouldSkipOnIdempotency determines if a job should be skipped based on idempotency settings.
-func ShouldSkipOnIdempotency(ctx context.Context, store store.IStore, job *model.JobM) bool {
-	// Check if there are any successful jobs with the same parameters
-	_, jobs, err := store.Job().List(ctx, where.NewWhere().F(
-		"scope", job.Scope,
-		"status", known.JobSucceeded,
-	).L(1))
-	if err != nil {
-		log.Errorw("Failed to check for existing successful jobs", "error", err)
-		return false
-	}
-
-	// If there are successful jobs with similar parameters, skip this job
-	for _, existingJob := range jobs {
-		if isSimilarJob(job, existingJob) {
-			log.Infow("Skipping job due to idempotency", "jobID", job.JobID, "existingJobID", existingJob.JobID)
-			return true
-		}
-	}
-
-	return false
-}
-
-// isSimilarJob checks if two jobs are similar enough to be considered duplicates.
-func isSimilarJob(job1, job2 *model.JobM) bool {
-	// Compare basic job parameters
-	return job1.Scope == job2.Scope &&
-		job1.Watcher == job2.Watcher &&
-		job1.Name == job2.Name
-}
-
-// SetDefaultJobParams sets default parameters for a job if they are not already set.
+// SetDefaultJobParams sets default parameters for the job if they are not already set.
 func SetDefaultJobParams(job *model.JobM) {
-	if job.Scope == "" {
-		job.Scope = known.LLMJobScope
-	}
-
-	if job.Watcher == "" {
-		job.Watcher = known.LLMTrainWatcher
+	if job.Params.Train.JobTimeout == 0 {
+		job.Params.Train.JobTimeout = int64(known.LLMTrainTimeout)
 	}
 }
 
-// buildEmbedderInputs generates inputs for the embedding process based on the job configuration.
-func buildEmbedderInputs(job *model.JobM) []string {
-	var inputs []string
-
-	// TODO: Implement logic to build embedder inputs based on job parameters
-	// This would typically involve:
-	// 1. Reading job configuration
-	// 2. Determining embedder type and parameters
-	// 3. Generating appropriate input data structures
-
-	// For now, return a placeholder input
-	inputs = append(inputs, "default_embedding_input")
-
-	return inputs
-}
-
-// validateJobParameters validates that the job has all required parameters for LLM training.
-func validateJobParameters(job *model.JobM) error {
-	if job.JobID == "" {
-		return fmt.Errorf("job ID is required")
-	}
-
-	if job.Scope != known.LLMJobScope {
-		return fmt.Errorf("invalid job scope: expected %s, got %s", known.LLMJobScope, job.Scope)
-	}
-
-	if job.Watcher != known.LLMTrainWatcher {
-		return fmt.Errorf("invalid job watcher: expected %s, got %s", known.LLMTrainWatcher, job.Watcher)
-	}
-
-	return nil
-}
-
-// calculateProgress calculates the progress percentage based on the current job status.
-func calculateProgress(status string) int {
-	switch status {
-	case known.LLMTrainPending:
-		return 0
-	case known.LLMTrainDownloading:
-		return 10
-	case known.LLMTrainDownloaded:
-		return 20
-	case known.LLMTrainEmbedding:
-		return 40
-	case known.LLMTrainEmbedded:
-		return 60
-	case known.LLMTrainTraining:
-		return 80
-	case known.LLMTrainTrained:
-		return 95
-	case known.LLMTrainSucceeded:
-		return 100
-	case known.LLMTrainFailed:
-		return -1 // Indicate failure
-	default:
-		return 0
-	}
+// buildEmbedderInputs generates inputs for embedding based on the specified embedder type.
+func buildEmbedderInputs(params *v1.TrainParams) []any {
+	// TODO: Implement proper embedder input building
+	return []any{}
 }
