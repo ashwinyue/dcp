@@ -85,6 +85,17 @@ func (c *ServerConfig) InstallRESTAPI(engine *gin.Engine) {
 			jobv1.GET(":jobID", handler.GetJob)    // 查询Job详情
 			jobv1.GET("", handler.ListJob)         // 查询Job列表
 		}
+
+		// Document相关路由 (MongoDB)
+		documentv1 := v1.Group("/documents")
+		{
+			documentv1.POST("", handler.CreateDocument)                              // 创建文档
+			documentv1.PUT(":id", handler.UpdateDocument)                            // 更新文档
+			documentv1.DELETE(":id", handler.DeleteDocument)                         // 删除文档
+			documentv1.GET(":id", handler.GetDocument)                               // 查询文档详情
+			documentv1.GET("/by-object-id/:objectId", handler.GetDocumentByObjectID) // 根据ObjectID查询文档
+			documentv1.GET("", handler.ListDocuments)                                // 查询文档列表
+		}
 	}
 }
 

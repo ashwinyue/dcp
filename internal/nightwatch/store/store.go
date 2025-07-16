@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/wire"
 	"github.com/onexstack/onexstack/pkg/store/where"
+	"go.mongodb.org/mongo-driver/mongo"
 	"gorm.io/gorm"
 )
 
@@ -40,6 +41,8 @@ type IStore interface {
 	Post() PostStore
 	// ConcretePost ConcretePosts 是一个示例 store 实现，用来演示在 Go 中如何直接与 DB 交互.
 	ConcretePost() ConcretePostStore
+	// Document 返回一个实现了 DocumentStore 接口的实例 (MongoDB).
+	Document() DocumentStore
 }
 
 // transactionKey 用于在 context.Context 中存储事务上下文的键.
@@ -48,6 +51,9 @@ type transactionKey struct{}
 // datastore 是 IStore 的具体实现.
 type datastore struct {
 	core *gorm.DB
+
+	// MongoDB集合
+	documentCollection *mongo.Collection
 
 	// 可以根据需要添加其他数据库实例
 	// fake *gorm.DB
@@ -60,7 +66,20 @@ var _ IStore = (*datastore)(nil)
 func NewStore(db *gorm.DB) *datastore {
 	// 确保 S 只被初始化一次
 	once.Do(func() {
-		S = &datastore{db}
+		S = &datastore{core: db}
+	})
+
+	return S
+}
+
+// NewStoreWithMongo 创建一个带有MongoDB支持的IStore类型实例.
+func NewStoreWithMongo(db *gorm.DB, documentCollection *mongo.Collection) *datastore {
+	// 确保 S 只被初始化一次
+	once.Do(func() {
+		S = &datastore{
+			core:               db,
+			documentCollection: documentCollection,
+		}
 	})
 
 	return S
@@ -111,4 +130,9 @@ func (store *datastore) Post() PostStore {
 // ConcretePost 返回一个实现了 ConcretePostStore 接口的实例.
 func (store *datastore) ConcretePost() ConcretePostStore {
 	return newConcretePostStore(store)
+}
+
+// Document 返回一个实现了 DocumentStore 接口的实例.
+func (store *datastore) Document() DocumentStore {
+	return newDocumentStore(store.documentCollection)
 }

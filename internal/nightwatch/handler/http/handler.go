@@ -15,12 +15,16 @@ import (
 type Handler struct {
 	biz biz.IBiz
 	val *validation.Validator
+
+	// 嵌入文档处理器
+	*DocumentHandler
 }
 
 // NewHandler 创建新的 Handler 实例.
 func NewHandler(biz biz.IBiz, val *validation.Validator) *Handler {
 	return &Handler{
-		biz: biz,
-		val: val,
+		biz:             biz,
+		val:             val,
+		DocumentHandler: NewDocumentHandler(biz),
 	}
 }

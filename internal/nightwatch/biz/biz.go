@@ -12,6 +12,7 @@ import (
 	"github.com/google/wire"
 
 	cronjobv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/cronjob"
+	documentv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/document"
 	jobv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/job"
 	postv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/post"
 
@@ -34,6 +35,8 @@ type IBiz interface {
 	JobV1() jobv1.JobBiz
 	// PostV1 获取帖子业务接口.
 	PostV1() postv1.PostBiz
+	// Document 获取文档业务接口.
+	Document() documentv1.DocumentBiz
 	// PostV2 获取帖子业务接口（V2 版本）.
 	// PostV2() post.PostBiz
 }
@@ -64,4 +67,9 @@ func (b *biz) JobV1() jobv1.JobBiz {
 // PostV1 返回一个实现了 PostBiz 接口的实例.
 func (b *biz) PostV1() postv1.PostBiz {
 	return postv1.New(b.store)
+}
+
+// Document 返回一个实现了 DocumentBiz 接口的实例.
+func (b *biz) Document() documentv1.DocumentBiz {
+	return documentv1.New(b.store)
 }

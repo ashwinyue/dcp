@@ -46,6 +46,8 @@ type ServerOptions struct {
 	GRPCOptions *genericoptions.GRPCOptions `json:"grpc" mapstructure:"grpc"`
 	// MySQLOptions 包含 MySQL 配置选项.
 	MySQLOptions *genericoptions.MySQLOptions `json:"mysql" mapstructure:"mysql"`
+	// MongoOptions 包含 MongoDB 配置选项.
+	MongoOptions *genericoptions.MongoOptions `json:"mongo" mapstructure:"mongo"`
 	// WatchOptions 包含 Watch 配置选项.
 	WatchOptions *watch.Options `json:"watch" mapstructure:"watch"`
 }
@@ -61,6 +63,7 @@ func NewServerOptions() *ServerOptions {
 		HTTPOptions:           genericoptions.NewHTTPOptions(),
 		GRPCOptions:           genericoptions.NewGRPCOptions(),
 		MySQLOptions:          genericoptions.NewMySQLOptions(),
+		MongoOptions:          genericoptions.NewMongoOptions(),
 		WatchOptions:          watch.NewOptions(),
 	}
 	opts.HTTPOptions.Addr = ":5555"
@@ -81,6 +84,7 @@ func (o *ServerOptions) AddFlags(fs *pflag.FlagSet) {
 	o.HTTPOptions.AddFlags(fs)
 	o.GRPCOptions.AddFlags(fs)
 	o.MySQLOptions.AddFlags(fs)
+	o.MongoOptions.AddFlags(fs)
 	o.WatchOptions.AddFlags(fs)
 }
 
@@ -104,6 +108,7 @@ func (o *ServerOptions) Validate() error {
 	errs = append(errs, o.TLSOptions.Validate()...)
 	errs = append(errs, o.HTTPOptions.Validate()...)
 	errs = append(errs, o.MySQLOptions.Validate()...)
+	errs = append(errs, o.MongoOptions.Validate()...)
 	if o.WatchOptions != nil {
 		errs = append(errs, o.WatchOptions.Validate()...)
 	}
@@ -128,6 +133,7 @@ func (o *ServerOptions) Config() (*nightwatch.Config, error) {
 		HTTPOptions:           o.HTTPOptions,
 		GRPCOptions:           o.GRPCOptions,
 		MySQLOptions:          o.MySQLOptions,
+		MongoOptions:          o.MongoOptions,
 		WatchOptions:          o.WatchOptions,
 	}, nil
 }

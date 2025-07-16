@@ -52,6 +52,7 @@ type Config struct {
 	HTTPOptions       *genericoptions.HTTPOptions
 	GRPCOptions       *genericoptions.GRPCOptions
 	MySQLOptions      *genericoptions.MySQLOptions
+	MongoOptions      *genericoptions.MongoOptions
 	// Watcher related configurations
 	WatchOptions          *watch.Options
 	EnableWatcher         bool
@@ -72,6 +73,7 @@ type UnionServer struct {
 	srv    server.Server
 	watch  *watch.Watch
 	db     *gorm.DB
+	mongo  *MongoManager
 	config *Config
 }
 
@@ -91,6 +93,17 @@ func (cfg *Config) NewUnionServer() (*UnionServer, error) {
 	db, err := cfg.NewDB()
 	if err != nil {
 		return nil, err
+	}
+
+	// 创建MongoDB连接
+	mongoManager, err := cfg.NewMongoManager()
+	if err != nil {
+		return nil, fmt.Errorf("初始化MongoDB失败: %w", err)
+	}
+
+	// 创建MongoDB索引
+	if err := mongoManager.CreateIndexes(); err != nil {
+		return nil, fmt.Errorf("创建MongoDB索引失败: %w", err)
 	}
 
 	// 创建服务配置，这些配置可用来创建服务器
@@ -124,6 +137,7 @@ func (cfg *Config) NewUnionServer() (*UnionServer, error) {
 		srv:    srv,
 		watch:  watchIns,
 		db:     db,
+		mongo:  mongoManager,
 		config: cfg,
 	}, nil
 }
@@ -152,6 +166,27 @@ func (cfg *Config) NewDB() (*gorm.DB, error) {
 // ProvideDB 提供数据库实例给 Wire
 func ProvideDB(cfg *Config) (*gorm.DB, error) {
 	return cfg.NewDB()
+}
+
+// ProvideStoreWithMongo 提供带有MongoDB支持的Store实例给Wire
+func ProvideStoreWithMongo(cfg *Config) (store.IStore, error) {
+	// 创建传统数据库连接
+	db, err := cfg.NewDB()
+	if err != nil {
+		return nil, fmt.Errorf("创建数据库连接失败: %w", err)
+	}
+
+	// 创建MongoDB连接
+	mongoManager, err := cfg.NewMongoManager()
+	if err != nil {
+		return nil, fmt.Errorf("创建MongoDB连接失败: %w", err)
+	}
+
+	// 获取documents集合
+	documentCollection := mongoManager.GetCollection("documents")
+
+	// 创建带有MongoDB支持的store实例
+	return store.NewStoreWithMongo(db, documentCollection), nil
 }
 
 // CreateWatcherConfig used to create configuration used by all watcher.
