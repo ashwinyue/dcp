@@ -1,0 +1,285 @@
+// Copyright 2024 孔令飞 <colin404@foxmail.com>. All rights reserved.
+// Use of this source code is governed by a MIT style
+// license that can be found in the LICENSE file. The original repo for
+// this file is https://github.com/onexstack/miniblog. The professional
+// version of this repository is https://github.com/onexstack/onex.
+
+// StatusTracking API 定义，包含状态跟踪的请求和响应消息
+syntax = "proto3";
+
+package nightwatch.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nightwatch/v1/job.proto";
+
+option go_package = "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1;v1";
+
+// ========== 状态跟踪请求/响应消息 ==========
+
+// UpdateJobStatusRequest 更新任务状态请求
+message UpdateJobStatusRequest {
+    // 任务ID
+    string jobId = 1;
+    // 新状态
+    string status = 2;
+    // 可选的条件信息
+    optional JobCondition condition = 3;
+    // 更新时间戳
+    int64 timestamp = 4;
+}
+
+// UpdateJobStatusResponse 更新任务状态响应
+message UpdateJobStatusResponse {
+    // 是否成功
+    bool success = 1;
+    // 响应消息
+    string message = 2;
+}
+
+// GetJobStatusRequest 获取任务状态请求
+message GetJobStatusRequest {
+    // 任务ID
+    string jobId = 1;
+}
+
+// GetJobStatusResponse 获取任务状态响应
+message GetJobStatusResponse {
+    // 任务ID
+    string jobId = 1;
+    // 当前状态
+    string status = 2;
+    // 最后更新时间
+    int64 updatedAt = 3;
+    // 开始时间
+    int64 startedAt = 4;
+    // 结束时间
+    int64 endedAt = 5;
+    // 运行时间（秒）
+    int64 runtimeSeconds = 6;
+    // 是否来自缓存
+    bool fromCache = 7;
+}
+
+// TrackRunningJobsRequest 跟踪运行中任务请求
+message TrackRunningJobsRequest {
+    // 可选的作用域过滤
+    optional string scope = 1;
+    // 可选的监控器过滤
+    optional string watcher = 2;
+}
+
+// RunningJobInfo 运行中任务信息
+message RunningJobInfo {
+    // 任务ID
+    string jobId = 1;
+    // 当前状态
+    string status = 2;
+    // 开始时间
+    int64 startedAt = 3;
+    // 运行时间（秒）
+    int64 runtimeSeconds = 4;
+    // 是否健康
+    bool isHealthy = 5;
+    // 监控器名称
+    string watcher = 6;
+    // 作用域
+    string scope = 7;
+}
+
+// TrackRunningJobsResponse 跟踪运行中任务响应
+message TrackRunningJobsResponse {
+    // 总数量
+    int64 totalCount = 1;
+    // 运行中任务列表
+    repeated RunningJobInfo runningJobs = 2;
+    // 跟踪时间
+    int64 trackTime = 3;
+}
+
+// GetJobStatisticsRequest 获取任务统计请求
+message GetJobStatisticsRequest {
+    // 开始时间（可选）
+    optional int64 startTime = 1;
+    // 结束时间（可选）
+    optional int64 endTime = 2;
+    // 作用域过滤（可选）
+    optional string scope = 3;
+    // 监控器过滤（可选）
+    optional string watcher = 4;
+}
+
+// GetJobStatisticsResponse 获取任务统计响应
+message GetJobStatisticsResponse {
+    // 总任务数
+    int64 totalJobs = 1;
+    // 待处理任务数
+    int64 pendingJobs = 2;
+    // 运行中任务数
+    int64 runningJobs = 3;
+    // 成功完成任务数
+    int64 succeededJobs = 4;
+    // 失败任务数
+    int64 failedJobs = 5;
+    // 平均运行时间（秒）
+    int64 avgRuntimeSeconds = 6;
+    // 成功率（百分比）
+    double successRate = 7;
+    // 生成时间
+    int64 generatedAt = 8;
+}
+
+// GetBatchStatisticsRequest 获取批处理统计请求
+message GetBatchStatisticsRequest {
+    // 批处理ID（可选，为空则获取所有）
+    optional string batchId = 1;
+    // 开始时间（可选）
+    optional int64 startTime = 2;
+    // 结束时间（可选）
+    optional int64 endTime = 3;
+}
+
+// BatchStatusInfo 批处理状态信息
+message BatchStatusInfo {
+    // 批处理ID
+    string batchId = 1;
+    // 状态
+    string status = 2;
+    // 总消息数
+    int64 totalMessages = 3;
+    // 已处理消息数
+    int64 processedMessages = 4;
+    // 失败消息数
+    int64 failedMessages = 5;
+    // 成功消息数
+    int64 successMessages = 6;
+    // 处理进度（百分比）
+    float progress = 7;
+    // 开始时间
+    int64 startedAt = 8;
+    // 更新时间
+    int64 updatedAt = 9;
+}
+
+// GetBatchStatisticsResponse 获取批处理统计响应
+message GetBatchStatisticsResponse {
+    // 批处理状态列表
+    repeated BatchStatusInfo batchStats = 1;
+    // 总批处理数量
+    int64 totalBatches = 2;
+    // 生成时间
+    int64 generatedAt = 3;
+}
+
+// ========== 健康监控相关消息 ==========
+
+// JobHealthCheckRequest 任务健康检查请求
+message JobHealthCheckRequest {
+    // 任务ID
+    string jobId = 1;
+}
+
+// JobHealthStatus 任务健康状态
+message JobHealthStatus {
+    // 任务ID
+    string jobId = 1;
+    // 当前状态
+    string status = 2;
+    // 最后心跳时间
+    int64 lastHeartbeat = 3;
+    // 是否健康
+    bool isHealthy = 4;
+    // 错误计数
+    int64 errorCount = 5;
+    // 重试计数
+    int64 retryCount = 6;
+    // 处理时间（毫秒）
+    int64 processingTimeMs = 7;
+    // 健康指标
+    map<string, string> metrics = 8;
+}
+
+// JobHealthCheckResponse 任务健康检查响应
+message JobHealthCheckResponse {
+    // 健康状态
+    JobHealthStatus healthStatus = 1;
+}
+
+// GetSystemMetricsRequest 获取系统指标请求
+message GetSystemMetricsRequest {
+    // 无需参数
+}
+
+// SystemMetrics 系统监控指标
+message SystemMetrics {
+    // 时间戳
+    int64 timestamp = 1;
+    // 活跃任务数
+    int64 activeJobs = 2;
+    // 完成任务数
+    int64 completedJobs = 3;
+    // 失败任务数
+    int64 failedJobs = 4;
+    // 待处理任务数
+    int64 pendingJobs = 5;
+    // 平均运行时间（毫秒）
+    int64 averageRuntimeMs = 6;
+    // 成功率（百分比）
+    double successRate = 7;
+    // 每分钟吞吐量
+    int64 throughputPerMin = 8;
+    // 资源使用情况
+    map<string, string> resourceUsage = 9;
+}
+
+// GetSystemMetricsResponse 获取系统指标响应
+message GetSystemMetricsResponse {
+    // 系统指标
+    SystemMetrics systemMetrics = 1;
+}
+
+// ========== 状态清理相关消息 ==========
+
+// CleanupExpiredStatusRequest 清理过期状态请求
+message CleanupExpiredStatusRequest {
+    // 保留时间（小时）
+    int64 retentionHours = 1;
+}
+
+// CleanupExpiredStatusResponse 清理过期状态响应
+message CleanupExpiredStatusResponse {
+    // 清理的记录数
+    int64 cleanedCount = 1;
+    // 成功标志
+    bool success = 2;
+    // 消息
+    string message = 3;
+}
+
+// ========== 状态监控器相关消息 ==========
+
+// StartStatusWatcherRequest 启动状态监控器请求
+message StartStatusWatcherRequest {
+    // 监控间隔（秒）
+    optional int32 intervalSeconds = 1;
+}
+
+// StartStatusWatcherResponse 启动状态监控器响应
+message StartStatusWatcherResponse {
+    // 成功标志
+    bool success = 1;
+    // 消息
+    string message = 2;
+}
+
+// StopStatusWatcherRequest 停止状态监控器请求
+message StopStatusWatcherRequest {
+    // 无需参数
+}
+
+// StopStatusWatcherResponse 停止状态监控器响应
+message StopStatusWatcherResponse {
+    // 成功标志
+    bool success = 1;
+    // 消息
+    string message = 2;
+} 

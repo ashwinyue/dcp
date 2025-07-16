@@ -2,61 +2,81 @@ package messagebatch
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/gammazero/workerpool"
 	"github.com/onexstack/onexstack/pkg/store/where"
 	"github.com/onexstack/onexstack/pkg/watch/registry"
 	"go.uber.org/ratelimit"
 
-	"github.com/ashwinyue/dcp/internal/nightwatch/model"
+	"github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/messagebatch"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/nightwatch/watcher"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
+	"github.com/ashwinyue/dcp/internal/pkg/log"
+	"github.com/ashwinyue/dcp/internal/pkg/model"
 )
 
+// Ensure Watcher implements the registry.Watcher interface.
 var _ registry.Watcher = (*Watcher)(nil)
 
-// Watcher implements the message batch job watcher
-type Watcher struct {
-	Store      store.IStore
-	maxWorkers int64
-	Limiter    struct {
-		Processing ratelimit.Limiter
-		Send       ratelimit.Limiter
-	}
+// Limiter holds rate limiters for different operations.
+type Limiter struct {
+	Processing ratelimit.Limiter
+	Messaging  ratelimit.Limiter
 }
 
-// Run runs the watcher
+// Watcher monitors and processes message batch jobs.
+type Watcher struct {
+	// Business service layer
+	MessageBatchService *messagebatch.MessageBatchService
+
+	// Data access
+	Store store.IStore
+
+	// Configuration
+	MaxWorkers int64
+	Limiter    Limiter
+
+	// Logger
+	logger log.Logger
+}
+
+// Run executes the watcher logic to process message batch jobs.
 func (w *Watcher) Run() {
-	// Define the phases that the watcher can handle
-	runnablePhase := []string{
+	// Define the phases that the watcher can handle for message batch jobs.
+	runablePhase := []string{
 		known.MessageBatchPending,
-		known.MessageBatchPreparationReady,
-		known.MessageBatchPreparationRunning,
-		known.MessageBatchPreparationPausing,
-		known.MessageBatchDeliveryReady,
-		known.MessageBatchDeliveryRunning,
-		known.MessageBatchDeliveryPausing,
+		known.MessageBatchProcessing,
+		known.MessageBatchPartialComplete,
+		known.MessageBatchRetrying,
 	}
 
 	_, jobs, err := w.Store.Job().List(context.Background(), where.F(
 		"scope", known.MessageBatchJobScope,
 		"watcher", known.MessageBatchWatcher,
-		"status", runnablePhase,
+		"status", runablePhase,
 		"suspend", known.JobNonSuspended,
 	))
 	if err != nil {
+		w.logger.Errorw("Failed to get runnable message batch jobs", "error", err)
 		return
 	}
 
-	wp := workerpool.New(int(w.maxWorkers))
+	wp := workerpool.New(int(w.MaxWorkers))
 	for _, job := range jobs {
 		ctx := context.Background()
+		w.logger.Infow("Processing message batch job",
+			"jobID", job.JobID,
+			"status", job.Status,
+			"scope", job.Scope)
 
 		wp.Submit(func() {
-			if err := w.processJob(ctx, job); err != nil {
-				// Log error
-				return
+			if err := w.processMessageBatchJob(ctx, job); err != nil {
+				w.logger.Errorw("Failed to process message batch job",
+					"error", err,
+					"jobID", job.JobID)
 			}
 		})
 	}
@@ -64,124 +84,154 @@ func (w *Watcher) Run() {
 	wp.StopWait()
 }
 
-// processJob processes a single job
-func (w *Watcher) processJob(ctx context.Context, job *model.JobM) error {
-	// Determine which phase the job is in and create appropriate FSM
-	if known.IsPreparationState(job.Status) {
-		return w.processPreparationPhase(ctx, job)
-	} else if known.IsDeliveryState(job.Status) {
-		return w.processDeliveryPhase(ctx, job)
-	}
+// processMessageBatchJob 处理单个消息批次任务
+func (w *Watcher) processMessageBatchJob(ctx context.Context, job *model.JobM) error {
+	w.Limiter.Processing.Take() // Rate limiting
 
-	// Handle initial state - start with preparation
-	if job.Status == known.MessageBatchPending {
-		return w.startPreparationPhase(ctx, job)
-	}
+	// 从job中提取批次信息
+	batchID := job.JobID
+	partitionID := extractPartitionID(job)
 
-	// Handle transition from preparation to delivery
-	if job.Status == known.MessageBatchPreparationCompleted {
-		return w.startDeliveryPhase(ctx, job)
-	}
+	w.logger.Infow("Starting message batch job processing",
+		"batchID", batchID,
+		"partitionID", partitionID,
+		"status", job.Status)
 
-	// Handle final states
-	if job.Status == known.MessageBatchSucceeded || job.Status == known.MessageBatchFailed {
-		// Job is in final state, nothing to do
-		return nil
-	}
-
-	return nil
-}
-
-// processPreparationPhase processes the preparation phase
-func (w *Watcher) processPreparationPhase(ctx context.Context, job *model.JobM) error {
-	// Create preparation FSM
-	preparationFSM := NewPreparationFSM(job.Status, w, job)
-
-	// Determine the appropriate event based on current state
-	var event string
 	switch job.Status {
-	case known.MessageBatchPreparationReady:
-		event = known.MessageBatchEventPrepareBegin
-	case known.MessageBatchPreparationPausing:
-		event = known.MessageBatchEventPreparePaused
-	case known.MessageBatchPreparationPaused:
-		// Check if should resume or stay paused
-		return nil
-	case known.MessageBatchPreparationFailed:
-		// Check if should retry
-		if preparationFSM.canRetry() {
-			event = known.MessageBatchEventPrepareRetry
-		} else {
-			return nil
-		}
+	case known.MessageBatchPending:
+		return w.handlePendingBatch(ctx, batchID, partitionID, job)
+	case known.MessageBatchProcessing:
+		return w.handleProcessingBatch(ctx, batchID, partitionID, job)
+	case known.MessageBatchPartialComplete:
+		return w.handlePartialCompleteBatch(ctx, batchID, partitionID, job)
+	case known.MessageBatchRetrying:
+		return w.handleRetryingBatch(ctx, batchID, partitionID, job)
 	default:
+		w.logger.Warnw("Unknown message batch job status", "status", job.Status, "jobID", job.JobID)
 		return nil
 	}
-
-	return preparationFSM.Transition(ctx, event)
 }
 
-// processDeliveryPhase processes the delivery phase
-func (w *Watcher) processDeliveryPhase(ctx context.Context, job *model.JobM) error {
-	// Create delivery FSM
-	deliveryFSM := NewDeliveryFSM(job.Status, w, job)
+// handlePendingBatch 处理待处理的批次
+func (w *Watcher) handlePendingBatch(ctx context.Context, batchID string, partitionID int, job *model.JobM) error {
+	w.logger.Infow("Handling pending batch", "batchID", batchID, "partitionID", partitionID)
 
-	// Determine the appropriate event based on current state
-	var event string
-	switch job.Status {
-	case known.MessageBatchDeliveryReady:
-		event = known.MessageBatchEventDeliveryBegin
-	case known.MessageBatchDeliveryPausing:
-		event = known.MessageBatchEventDeliveryPaused
-	case known.MessageBatchDeliveryPaused:
-		// Check if should resume or stay paused
-		return nil
-	case known.MessageBatchDeliveryFailed:
-		// Check if should retry
-		if deliveryFSM.canRetry() {
-			event = known.MessageBatchEventDeliveryRetry
-		} else {
-			return nil
-		}
-	default:
-		return nil
+	// 1. 创建批次
+	if err := w.MessageBatchService.CreateBatch(ctx, batchID, partitionID); err != nil {
+		w.logger.Errorw("Failed to create batch", "error", err, "batchID", batchID)
+		return w.updateJobStatus(ctx, job, known.MessageBatchFailed, err.Error())
 	}
 
-	return deliveryFSM.Transition(ctx, event)
+	// 2. 更新任务状态为处理中
+	return w.updateJobStatus(ctx, job, known.MessageBatchProcessing, "Batch created and ready for processing")
 }
 
-// startPreparationPhase starts the preparation phase for a pending job
-func (w *Watcher) startPreparationPhase(ctx context.Context, job *model.JobM) error {
-	preparationFSM := NewPreparationFSM(job.Status, w, job)
-	return preparationFSM.Transition(ctx, known.MessageBatchEventPrepareStart)
+// handleProcessingBatch 处理正在处理的批次
+func (w *Watcher) handleProcessingBatch(ctx context.Context, batchID string, partitionID int, job *model.JobM) error {
+	w.logger.Infow("Handling processing batch", "batchID", batchID, "partitionID", partitionID)
+
+	// 模拟消息数据（在实际应用中，这些数据可能来自外部系统或配置）
+	messages := w.generateSampleMessages(batchID, 10)
+
+	// 处理批次
+	if err := w.MessageBatchService.ProcessBatch(ctx, batchID, partitionID, messages); err != nil {
+		w.logger.Errorw("Failed to process batch", "error", err, "batchID", batchID)
+		return w.updateJobStatus(ctx, job, known.MessageBatchFailed, err.Error())
+	}
+
+	// 更新任务状态为完成
+	return w.updateJobStatus(ctx, job, known.MessageBatchCompleted, "Batch processing completed successfully")
 }
 
-// startDeliveryPhase starts the delivery phase after preparation is completed
-func (w *Watcher) startDeliveryPhase(ctx context.Context, job *model.JobM) error {
-	deliveryFSM := NewDeliveryFSM(job.Status, w, job)
-	return deliveryFSM.Transition(ctx, known.MessageBatchEventDeliveryStart)
+// handlePartialCompleteBatch 处理部分完成的批次
+func (w *Watcher) handlePartialCompleteBatch(ctx context.Context, batchID string, partitionID int, job *model.JobM) error {
+	w.logger.Infow("Handling partial complete batch", "batchID", batchID, "partitionID", partitionID)
+
+	// 获取批次状态，检查是否需要重试
+	batchDoc, err := w.MessageBatchService.GetBatchStatus(ctx, batchID)
+	if err != nil {
+		w.logger.Errorw("Failed to get batch status", "error", err, "batchID", batchID)
+		return w.updateJobStatus(ctx, job, known.MessageBatchFailed, err.Error())
+	}
+
+	// 判断是否需要重试
+	if batchDoc.MessageCount > 0 && len(batchDoc.Messages) < int(batchDoc.MessageCount) {
+		return w.updateJobStatus(ctx, job, known.MessageBatchRetrying, "Retrying incomplete messages")
+	}
+
+	// 标记为完成
+	return w.updateJobStatus(ctx, job, known.MessageBatchCompleted, "All messages processed successfully")
 }
 
-// Spec returns the cron job specification for scheduling
+// handleRetryingBatch 处理重试中的批次
+func (w *Watcher) handleRetryingBatch(ctx context.Context, batchID string, partitionID int, job *model.JobM) error {
+	w.logger.Infow("Handling retrying batch", "batchID", batchID, "partitionID", partitionID)
+
+	// 重新处理批次（这里可以实现更复杂的重试逻辑）
+	return w.handleProcessingBatch(ctx, batchID, partitionID, job)
+}
+
+// updateJobStatus 更新任务状态
+func (w *Watcher) updateJobStatus(ctx context.Context, job *model.JobM, status, message string) error {
+	job.Status = status
+	job.Message = message
+
+	return w.Store.Job().Update(ctx, job)
+}
+
+// extractPartitionID 从job中提取分区ID
+func extractPartitionID(job *model.JobM) int {
+	// 这里可以从job的metadata或其他字段中提取分区ID
+	// 暂时返回一个固定值
+	return 0
+}
+
+// generateSampleMessages 生成示例消息
+func (w *Watcher) generateSampleMessages(batchID string, count int) []messagebatch.MessageItem {
+	messages := make([]messagebatch.MessageItem, count)
+	for i := 0; i < count; i++ {
+		messages[i] = messagebatch.MessageItem{
+			MessageID: fmt.Sprintf("%s_msg_%d", batchID, i),
+			Content: map[string]interface{}{
+				"index":   i,
+				"batchID": batchID,
+				"data":    fmt.Sprintf("Sample message %d", i),
+			},
+			Timestamp: time.Now(),
+			Status:    "pending",
+		}
+	}
+	return messages
+}
+
+// Spec returns the cron job specification for scheduling.
 func (w *Watcher) Spec() string {
-	return "@every 10s"
+	return "@every 3s" // Run every 3 seconds
 }
 
-// SetAggregateConfig configures the watcher with the provided aggregate configuration
+// SetAggregateConfig configures the watcher with the provided aggregate configuration.
 func (w *Watcher) SetAggregateConfig(config *watcher.AggregateConfig) {
+	// Initialize the business service with all required dependencies
+	w.MessageBatchService = messagebatch.NewMessageBatchService(
+		config.Cache,
+		config.Messaging,
+		config.Store,
+		log.New(nil), // Use default logger
+	)
+
 	w.Store = config.Store
-	w.Limiter = struct {
-		Processing ratelimit.Limiter
-		Send       ratelimit.Limiter
-	}{
+	w.logger = log.New(nil)
+
+	// Initialize rate limiters
+	w.Limiter = Limiter{
 		Processing: ratelimit.New(known.MessageBatchProcessingQPS),
-		Send:       ratelimit.New(known.MessageBatchSendQPS),
+		Messaging:  ratelimit.New(known.MessageBatchMessagingQPS),
 	}
 }
 
-// SetMaxWorkers sets the maximum number of concurrent workers for the watcher
+// SetMaxWorkers sets the maximum number of concurrent workers for the watcher.
 func (w *Watcher) SetMaxWorkers(maxWorkers int64) {
-	w.maxWorkers = known.MessageBatchMaxWorkers
+	w.MaxWorkers = maxWorkers
 }
 
 func init() {

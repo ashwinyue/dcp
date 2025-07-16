@@ -15,6 +15,15 @@ const (
 
 	// MessageBatchPending indicates that the message batch is pending.
 	MessageBatchPending = JobPending
+	// MessageBatchProcessing indicates that the message batch is currently being processed.
+	MessageBatchProcessing = "Processing"
+	// MessageBatchCompleted indicates that the message batch has completed successfully.
+	MessageBatchCompleted = "Completed"
+	// MessageBatchPartialComplete indicates that the message batch has partially completed.
+	MessageBatchPartialComplete = "PartialComplete"
+	// MessageBatchRetrying indicates that the message batch is retrying failed operations.
+	MessageBatchRetrying = "Retrying"
+
 	// MessageBatchPreparationReady indicates that the batch is ready for preparation.
 	MessageBatchPreparationReady = "PreparationReady"
 	// MessageBatchPreparationRunning indicates that the preparation phase is running.
@@ -135,6 +144,9 @@ const (
 
 	// MessageBatchSendQPS specify the maximum queries per second for sending.
 	MessageBatchSendQPS = 100
+
+	// MessageBatchMessagingQPS specify the maximum queries per second for messaging.
+	MessageBatchMessagingQPS = 80
 )
 
 // Message Batch job scope and watcher identifiers

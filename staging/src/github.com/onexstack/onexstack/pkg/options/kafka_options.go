@@ -367,3 +367,34 @@ func (o *KafkaOptions) Writer() (*kafka.Writer, error) {
 	kafkaWriter := kafka.NewWriter(config)
 	return kafkaWriter, nil
 }
+
+func (o *KafkaOptions) Reader() (*kafka.Reader, error) {
+	dialer, err := o.Dialer()
+	if err != nil {
+		return nil, err
+	}
+
+	// Kafka reader connection config
+	config := kafka.ReaderConfig{
+		Brokers:           o.Brokers,
+		Topic:             o.Topic,
+		GroupID:           o.ReaderOptions.GroupID,
+		Partition:         o.ReaderOptions.Partition,
+		Dialer:            dialer,
+		QueueCapacity:     o.ReaderOptions.QueueCapacity,
+		MinBytes:          o.ReaderOptions.MinBytes,
+		MaxBytes:          o.ReaderOptions.MaxBytes,
+		MaxWait:           o.ReaderOptions.MaxWait,
+		ReadBatchTimeout:  o.ReaderOptions.ReadBatchTimeout,
+		HeartbeatInterval: o.ReaderOptions.HeartbeatInterval,
+		CommitInterval:    o.ReaderOptions.CommitInterval,
+		RebalanceTimeout:  o.ReaderOptions.RebalanceTimeout,
+		StartOffset:       o.ReaderOptions.StartOffset,
+		MaxAttempts:       o.ReaderOptions.MaxAttempts,
+		Logger:            &logger{4},
+		ErrorLogger:       &logger{1},
+	}
+
+	kafkaReader := kafka.NewReader(config)
+	return kafkaReader, nil
+}

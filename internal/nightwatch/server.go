@@ -16,19 +16,20 @@ import (
 
 	genericoptions "github.com/onexstack/onexstack/pkg/options"
 	"github.com/onexstack/onexstack/pkg/watch"
-	"github.com/onexstack/onexstack/pkg/watch/logger/onex"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/biz"
+	"github.com/ashwinyue/dcp/internal/nightwatch/cache"
+	"github.com/ashwinyue/dcp/internal/nightwatch/messaging"
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/validation"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
 	"github.com/ashwinyue/dcp/internal/nightwatch/watcher"
 	_ "github.com/ashwinyue/dcp/internal/nightwatch/watcher/all"
 	"github.com/ashwinyue/dcp/internal/pkg/client/minio/fake"
-	"github.com/ashwinyue/dcp/internal/pkg/log"
-	"github.com/ashwinyue/dcp/internal/pkg/server"
+	dcplog "github.com/ashwinyue/dcp/internal/pkg/log"
+	dcpserver "github.com/ashwinyue/dcp/internal/pkg/server"
 )
 
 const (
@@ -53,6 +54,8 @@ type Config struct {
 	GRPCOptions       *genericoptions.GRPCOptions
 	MySQLOptions      *genericoptions.MySQLOptions
 	MongoOptions      *genericoptions.MongoOptions
+	RedisOptions      *genericoptions.RedisOptions
+	KafkaOptions      *genericoptions.KafkaOptions
 	// Watcher related configurations
 	WatchOptions          *watch.Options
 	EnableWatcher         bool
@@ -70,7 +73,7 @@ type Config struct {
 //
 // HTTP 反向代理服务器依赖 gRPC 服务器，所以在开启 HTTP 反向代理服务器时，会先启动 gRPC 服务器.
 type UnionServer struct {
-	srv    server.Server
+	srv    dcpserver.Server
 	watch  *watch.Watch
 	db     *gorm.DB
 	mongo  *MongoManager
@@ -87,7 +90,7 @@ type ServerConfig struct {
 // NewUnionServer 根据配置创建联合服务器.
 func (cfg *Config) NewUnionServer() (*UnionServer, error) {
 
-	log.Infow("Initializing federation server", "server-mode", cfg.ServerMode, "enable-memory-store", cfg.EnableMemoryStore, "enable-watcher", cfg.EnableWatcher)
+	dcplog.Infow("Initializing federation server", "server-mode", cfg.ServerMode, "enable-memory-store", cfg.EnableMemoryStore, "enable-watcher", cfg.EnableWatcher)
 
 	// 创建数据库连接
 	db, err := cfg.NewDB()
@@ -106,6 +109,30 @@ func (cfg *Config) NewUnionServer() (*UnionServer, error) {
 		return nil, fmt.Errorf("创建MongoDB索引失败: %w", err)
 	}
 
+	// 创建Redis缓存管理器 (如果配置了Redis选项)
+	var cacheManager *cache.CacheManager
+	if cfg.RedisOptions != nil {
+		cacheOpts := &cache.CacheOptions{
+			Addr:     cfg.RedisOptions.Addr,
+			Password: cfg.RedisOptions.Password,
+			DB:       cfg.RedisOptions.Database,
+			Prefix:   "nightwatch:",
+		}
+		cacheManager, err = cache.NewCacheManager(cacheOpts, dcplog.New(nil))
+		if err != nil {
+			return nil, fmt.Errorf("创建Redis缓存管理器失败: %w", err)
+		}
+	}
+
+	// 创建Kafka消息助手 (如果配置了Kafka选项)
+	var messagingHelper *messaging.KafkaHelper
+	if cfg.KafkaOptions != nil {
+		messagingHelper, err = messaging.NewKafkaHelper(cfg.KafkaOptions, dcplog.New(nil))
+		if err != nil {
+			return nil, fmt.Errorf("创建Kafka消息助手失败: %w", err)
+		}
+	}
+
 	// 创建服务配置，这些配置可用来创建服务器
 	srv, err := InitializeWebServer(cfg)
 	if err != nil {
@@ -114,8 +141,8 @@ func (cfg *Config) NewUnionServer() (*UnionServer, error) {
 
 	var watchIns *watch.Watch
 	if cfg.EnableWatcher {
-		// 创建watcher配置
-		watcherConfig, err := cfg.CreateWatcherConfig(db)
+		// 创建watcher配置，传入已初始化的组件
+		watcherConfig, err := cfg.CreateWatcherConfig(db, mongoManager, cacheManager, messagingHelper)
 		if err != nil {
 			return nil, err
 		}
@@ -124,7 +151,6 @@ func (cfg *Config) NewUnionServer() (*UnionServer, error) {
 		initialize := watcher.NewInitializer(watcherConfig)
 		opts := []watch.Option{
 			watch.WithInitialize(initialize),
-			watch.WithLogger(onex.NewLogger()),
 		}
 
 		watchIns, err = watch.NewWatch(cfg.WatchOptions, db, opts...)
@@ -190,8 +216,12 @@ func ProvideStoreWithMongo(cfg *Config) (store.IStore, error) {
 }
 
 // CreateWatcherConfig used to create configuration used by all watcher.
-func (cfg *Config) CreateWatcherConfig(db *gorm.DB) (*watcher.AggregateConfig, error) {
-	storeClient := store.NewStore(db)
+func (cfg *Config) CreateWatcherConfig(db *gorm.DB, mongoManager *MongoManager, cacheManager *cache.CacheManager, messagingHelper *messaging.KafkaHelper) (*watcher.AggregateConfig, error) {
+	// 获取documents集合
+	documentCollection := mongoManager.GetCollection("documents")
+
+	// 创建带有MongoDB支持的store实例
+	storeClient := store.NewStoreWithMongo(db, documentCollection)
 
 	// 创建 MinIO 客户端 (使用 fake 实现)
 	minioClient, err := fake.NewFakeMinioClient("default-bucket")
@@ -203,6 +233,8 @@ func (cfg *Config) CreateWatcherConfig(db *gorm.DB) (*watcher.AggregateConfig, e
 		Store:                 storeClient,
 		DB:                    db,
 		Minio:                 minioClient,
+		Cache:                 cacheManager,
+		Messaging:             messagingHelper,
 		UserWatcherMaxWorkers: cfg.UserWatcherMaxWorkers,
 	}, nil
 }
@@ -213,7 +245,7 @@ func (s *UnionServer) Run() error {
 
 	// 启动watcher服务
 	if s.watch != nil {
-		log.Infow("Starting watcher service")
+		dcplog.Infow("Starting watcher service")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		go s.watch.Start(ctx.Done())
@@ -228,19 +260,19 @@ func (s *UnionServer) Run() error {
 	// 阻塞程序，等待从 quit channel 中接收到信号
 	<-quit
 
-	log.Infow("Shutting down server ...")
+	dcplog.Infow("Shutting down server ...")
 
 	// 优雅关闭服务
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if s.watch != nil {
-		log.Infow("Stopping watcher service")
+		dcplog.Infow("Stopping watcher service")
 		s.watch.Stop()
 	}
 
 	if s.srv != nil {
-		log.Infow("Stopping server")
+		dcplog.Infow("Stopping server")
 		s.srv.GracefulStop(ctx)
 	}
 
@@ -251,13 +283,13 @@ func (s *UnionServer) Run() error {
 		}
 	}
 
-	log.Infow("Server exiting")
+	dcplog.Infow("Server exiting")
 
 	return nil
 }
 
 // NewWebServer 根据服务器模式创建对应的服务器实例
-func NewWebServer(serverMode string, serverConfig *ServerConfig) (server.Server, error) {
+func NewWebServer(serverMode string, serverConfig *ServerConfig) (dcpserver.Server, error) {
 	// 根据服务模式创建对应的服务实例
 	switch serverMode {
 	case GinServerMode:

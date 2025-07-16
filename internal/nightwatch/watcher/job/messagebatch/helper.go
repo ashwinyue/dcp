@@ -8,8 +8,30 @@ import (
 	"strings"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+
 	"github.com/ashwinyue/dcp/internal/pkg/log"
 )
+
+// MongoHelper provides MongoDB operations for message batch processing
+type MongoHelper struct {
+	client     *mongo.Client
+	database   string
+	collection string
+	logger     log.Logger
+}
+
+// NewMongoHelper creates a new MongoDB helper instance
+func NewMongoHelper(client *mongo.Client, database, collection string, logger log.Logger) *MongoHelper {
+	return &MongoHelper{
+		client:     client,
+		database:   database,
+		collection: collection,
+		logger:     logger,
+	}
+}
 
 // RetryConfig defines retry configuration
 type RetryConfig struct {
@@ -71,6 +93,8 @@ func IsRetryableError(err error) bool {
 		"service unavailable",
 		"too many requests",
 		"rate limit",
+		"duplicate key error", // MongoDB specific
+		"connection reset",
 	}
 
 	for _, pattern := range retryablePatterns {
@@ -82,7 +106,7 @@ func IsRetryableError(err error) bool {
 	return false
 }
 
-// ExecuteWithRetry executes a function with retry logic
+// ExecuteWithRetry executes a function with retry logic and MongoDB support
 func ExecuteWithRetry(
 	ctx context.Context,
 	config *RetryConfig,
@@ -162,121 +186,23 @@ func ExecuteWithRetry(
 	return fmt.Errorf("operation failed after %d retries: %w", config.MaxRetries, lastErr)
 }
 
-// ValidatePhaseTransition validates if a phase transition is allowed
-func ValidatePhaseTransition(fromPhase, toPhase string) error {
-	validTransitions := map[string][]string{
-		"":            {"PREPARATION"},
-		"PREPARATION": {"DELIVERY", "FAILED"},
-		"DELIVERY":    {"COMPLETED", "FAILED"},
-		"FAILED":      {"PREPARATION", "DELIVERY"}, // Allow restart
-		"COMPLETED":   {},                          // Terminal state
-	}
-
-	allowedStates, exists := validTransitions[fromPhase]
-	if !exists {
-		return fmt.Errorf("unknown phase: %s", fromPhase)
-	}
-
-	for _, allowed := range allowedStates {
-		if allowed == toPhase {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("invalid phase transition from %s to %s", fromPhase, toPhase)
-}
-
-// ValidateStateTransition validates if a state transition is allowed within a phase
-func ValidateStateTransition(fromState, toState string) error {
-	validTransitions := map[string][]string{
-		"Pending":   {"Ready", "Failed"},
-		"Ready":     {"Running", "Failed"},
-		"Running":   {"Pausing", "Completed", "Failed"},
-		"Pausing":   {"Paused", "Failed"},
-		"Paused":    {"Ready", "Failed"},
-		"Completed": {},        // Terminal state
-		"Failed":    {"Ready"}, // Allow retry
-	}
-
-	allowedStates, exists := validTransitions[fromState]
-	if !exists {
-		return fmt.Errorf("unknown state: %s", fromState)
-	}
-
-	for _, allowed := range allowedStates {
-		if allowed == toState {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("invalid state transition from %s to %s", fromState, toState)
-}
-
 // CalculatePartitionID calculates partition ID for a given key
 func CalculatePartitionID(key string, partitionCount int) int {
 	hash := crc32.ChecksumIEEE([]byte(key))
 	return int(hash % uint32(partitionCount))
 }
 
-// GenerateTaskID generates a unique task ID
+// GenerateTaskID generates a unique task ID with MongoDB document ID support
 func GenerateTaskID(prefix string, partitionID int) string {
 	timestamp := time.Now().Unix()
-	return fmt.Sprintf("%s_%d_%d", prefix, partitionID, timestamp)
+	hash := crc32.ChecksumIEEE([]byte(fmt.Sprintf("%s_%d_%d", prefix, partitionID, timestamp)))
+	return fmt.Sprintf("%s_%d_%x", prefix, partitionID, hash)
 }
 
-// FormatDuration formats duration for human-readable display
-func FormatDuration(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	} else if d < time.Minute {
-		return fmt.Sprintf("%.1fs", d.Seconds())
-	} else if d < time.Hour {
-		return fmt.Sprintf("%.1fm", d.Minutes())
-	} else {
-		return fmt.Sprintf("%.1fh", d.Hours())
-	}
-}
-
-// CalculateProgress calculates progress percentage
-func CalculateProgress(processed, total int64) float64 {
-	if total == 0 {
-		return 0.0
-	}
-	return float64(processed) / float64(total) * 100.0
-}
-
-// ExtractPhaseFromState extracts phase from a state string
-func ExtractPhaseFromState(state string) string {
-	if strings.HasPrefix(state, "Preparation") {
-		return "PREPARATION"
-	} else if strings.HasPrefix(state, "Delivery") {
-		return "DELIVERY"
-	}
-	return "UNKNOWN"
-}
-
-// IsTerminalState checks if a state is terminal (no further transitions)
-func IsTerminalState(state string) bool {
-	terminalStates := map[string]bool{
-		"PreparationCompleted": true,
-		"PreparationFailed":    false, // Can be retried
-		"DeliveryCompleted":    true,
-		"DeliveryFailed":       false, // Can be retried
-		"Completed":            true,
-		"Failed":               false, // Can be retried
-	}
-
-	if terminal, exists := terminalStates[state]; exists {
-		return terminal
-	}
-
-	return false
-}
-
-// ConvertMessageToTask converts MessageData to PartitionTask
-func ConvertMessageToTask(messages []MessageData, partitionID int) *PartitionTask {
+// ConvertMessageToTask converts MessageData to PartitionTask with MongoDB support
+func (h *MongoHelper) ConvertMessageToTask(ctx context.Context, messages []MessageData, partitionID int) (*PartitionTask, error) {
 	if len(messages) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	task := &PartitionTask{
@@ -288,6 +214,178 @@ func ConvertMessageToTask(messages []MessageData, partitionID int) *PartitionTas
 		RetryCount:   0,
 		TaskCode:     GenerateTaskCode(messages),
 		Metadata:     messages,
+	}
+
+	// Store task in MongoDB with retry logic
+	err := ExecuteWithRetry(ctx, DefaultRetryConfig(), func(ctx context.Context) error {
+		return h.StorePartitionTask(ctx, task)
+	}, h.logger, fmt.Sprintf("store_partition_task_%s", task.ID))
+
+	if err != nil {
+		h.logger.Errorw("Failed to store partition task in MongoDB",
+			"taskID", task.ID,
+			"partitionID", partitionID,
+			"error", err,
+		)
+		return nil, fmt.Errorf("failed to store partition task: %w", err)
+	}
+
+	return task, nil
+}
+
+// StorePartitionTask stores a partition task in MongoDB
+func (h *MongoHelper) StorePartitionTask(ctx context.Context, task *PartitionTask) error {
+	collection := h.client.Database(h.database).Collection(h.collection)
+
+	// Prepare document for MongoDB
+	document := bson.M{
+		"_id":           task.ID,
+		"batch_id":      task.BatchID,
+		"partition_key": task.PartitionKey,
+		"status":        task.Status,
+		"message_count": task.MessageCount,
+		"retry_count":   task.RetryCount,
+		"task_code":     task.TaskCode,
+		"metadata":      task.Metadata,
+		"created_at":    time.Now(),
+		"updated_at":    time.Now(),
+	}
+
+	if task.ProcessedAt != nil {
+		document["processed_at"] = *task.ProcessedAt
+	}
+	if task.CompletedAt != nil {
+		document["completed_at"] = *task.CompletedAt
+	}
+	if task.ErrorMessage != "" {
+		document["error_message"] = task.ErrorMessage
+	}
+
+	_, err := collection.InsertOne(ctx, document)
+	if err != nil {
+		return fmt.Errorf("failed to insert partition task: %w", err)
+	}
+
+	h.logger.Infow("Stored partition task in MongoDB",
+		"taskID", task.ID,
+		"partitionKey", task.PartitionKey,
+		"messageCount", task.MessageCount,
+	)
+
+	return nil
+}
+
+// UpdatePartitionTaskStatus updates a partition task status in MongoDB
+func (h *MongoHelper) UpdatePartitionTaskStatus(ctx context.Context, taskID, status string, errorMessage ...string) error {
+	collection := h.client.Database(h.database).Collection(h.collection)
+
+	update := bson.M{
+		"$set": bson.M{
+			"status":     status,
+			"updated_at": time.Now(),
+		},
+	}
+
+	if len(errorMessage) > 0 && errorMessage[0] != "" {
+		update["$set"].(bson.M)["error_message"] = errorMessage[0]
+	}
+
+	if status == "completed" {
+		update["$set"].(bson.M)["completed_at"] = time.Now()
+	}
+
+	filter := bson.M{"_id": taskID}
+	result, err := collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update partition task status: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("partition task not found: %s", taskID)
+	}
+
+	h.logger.Infow("Updated partition task status",
+		"taskID", taskID,
+		"status", status,
+		"modifiedCount", result.ModifiedCount,
+	)
+
+	return nil
+}
+
+// GetPartitionTasks retrieves partition tasks from MongoDB with optional filtering
+func (h *MongoHelper) GetPartitionTasks(ctx context.Context, filter bson.M, limit int64) ([]*PartitionTask, error) {
+	collection := h.client.Database(h.database).Collection(h.collection)
+
+	opts := options.Find()
+	if limit > 0 {
+		opts.SetLimit(limit)
+	}
+	opts.SetSort(bson.D{{"created_at", -1}})
+
+	cursor, err := collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find partition tasks: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var tasks []*PartitionTask
+	for cursor.Next(ctx) {
+		var doc bson.M
+		if err := cursor.Decode(&doc); err != nil {
+			h.logger.Errorw("Failed to decode partition task", "error", err)
+			continue
+		}
+
+		task := h.mongoDocToPartitionTask(doc)
+		tasks = append(tasks, task)
+	}
+
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("cursor error: %w", err)
+	}
+
+	return tasks, nil
+}
+
+// mongoDocToPartitionTask converts MongoDB document to PartitionTask
+func (h *MongoHelper) mongoDocToPartitionTask(doc bson.M) *PartitionTask {
+	task := &PartitionTask{}
+
+	if id, ok := doc["_id"].(string); ok {
+		task.ID = id
+	}
+	if batchID, ok := doc["batch_id"].(string); ok {
+		task.BatchID = batchID
+	}
+	if partitionKey, ok := doc["partition_key"].(string); ok {
+		task.PartitionKey = partitionKey
+	}
+	if status, ok := doc["status"].(string); ok {
+		task.Status = status
+	}
+	if messageCount, ok := doc["message_count"].(int64); ok {
+		task.MessageCount = messageCount
+	}
+	if retryCount, ok := doc["retry_count"].(int); ok {
+		task.RetryCount = retryCount
+	}
+	if taskCode, ok := doc["task_code"].(string); ok {
+		task.TaskCode = taskCode
+	}
+	if errorMessage, ok := doc["error_message"].(string); ok {
+		task.ErrorMessage = errorMessage
+	}
+	if metadata, ok := doc["metadata"]; ok {
+		task.Metadata = metadata
+	}
+
+	// Handle time fields
+	if processedAt, ok := doc["processed_at"].(time.Time); ok {
+		task.ProcessedAt = &processedAt
+	}
+	if completedAt, ok := doc["completed_at"].(time.Time); ok {
+		task.CompletedAt = &completedAt
 	}
 
 	return task
@@ -309,19 +407,6 @@ func GenerateTaskCode(messages []MessageData) string {
 	hash := crc32.ChecksumIEEE([]byte(combined))
 
 	return fmt.Sprintf("task_%x", hash)
-}
-
-// SanitizeInput sanitizes user input to prevent injection attacks
-func SanitizeInput(input string) string {
-	// Remove potentially dangerous characters
-	sanitized := strings.ReplaceAll(input, "'", "")
-	sanitized = strings.ReplaceAll(sanitized, "\"", "")
-	sanitized = strings.ReplaceAll(sanitized, ";", "")
-	sanitized = strings.ReplaceAll(sanitized, "--", "")
-	sanitized = strings.ReplaceAll(sanitized, "/*", "")
-	sanitized = strings.ReplaceAll(sanitized, "*/", "")
-
-	return strings.TrimSpace(sanitized)
 }
 
 // ValidateMessageData validates MessageData structure
@@ -385,57 +470,8 @@ func ValidatePartitionTask(task *PartitionTask) error {
 	return nil
 }
 
-// MergeStatistics merges multiple PhaseStatistics into one
-func MergeStatistics(stats ...*PhaseStatistics) *PhaseStatistics {
-	if len(stats) == 0 {
-		return &PhaseStatistics{}
-	}
-
-	merged := &PhaseStatistics{
-		StartTime: stats[0].StartTime,
-	}
-
-	for _, stat := range stats {
-		if stat == nil {
-			continue
-		}
-
-		merged.Total += stat.Total
-		merged.Processed += stat.Processed
-		merged.Success += stat.Success
-		merged.Failed += stat.Failed
-		merged.RetryCount += stat.RetryCount
-		merged.Partitions += stat.Partitions
-
-		// Use earliest start time
-		if stat.StartTime.Before(merged.StartTime) {
-			merged.StartTime = stat.StartTime
-		}
-
-		// Use latest end time
-		if stat.EndTime != nil {
-			if merged.EndTime == nil || stat.EndTime.After(*merged.EndTime) {
-				merged.EndTime = stat.EndTime
-			}
-		}
-	}
-
-	// Calculate percentage
-	if merged.Total > 0 {
-		merged.Percent = float32(merged.Processed) / float32(merged.Total) * 100
-	}
-
-	// Calculate duration
-	if merged.EndTime != nil {
-		duration := int64(merged.EndTime.Sub(merged.StartTime) / time.Second)
-		merged.Duration = &duration
-	}
-
-	return merged
-}
-
-// LogTransition logs state or phase transitions
-func LogTransition(logger log.Logger, transitionType, from, to, entity string, metadata map[string]interface{}) {
+// LogTransition logs state or phase transitions with MongoDB storage
+func (h *MongoHelper) LogTransition(ctx context.Context, transitionType, from, to, entity string, metadata map[string]interface{}) {
 	logFields := []interface{}{
 		"transitionType", transitionType,
 		"from", from,
@@ -448,5 +484,201 @@ func LogTransition(logger log.Logger, transitionType, from, to, entity string, m
 		logFields = append(logFields, key, value)
 	}
 
-	logger.Infow("State transition", logFields...)
+	h.logger.Infow("State transition", logFields...)
+
+	// Store transition log in MongoDB
+	if h.client != nil {
+		go func() {
+			transitionCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			h.storeTransitionLog(transitionCtx, transitionType, from, to, entity, metadata)
+		}()
+	}
+}
+
+// storeTransitionLog stores transition log in MongoDB
+func (h *MongoHelper) storeTransitionLog(ctx context.Context, transitionType, from, to, entity string, metadata map[string]interface{}) {
+	collection := h.client.Database(h.database).Collection("transition_logs")
+
+	document := bson.M{
+		"transition_type": transitionType,
+		"from_state":      from,
+		"to_state":        to,
+		"entity":          entity,
+		"metadata":        metadata,
+		"timestamp":       time.Now(),
+	}
+
+	_, err := collection.InsertOne(ctx, document)
+	if err != nil {
+		h.logger.Errorw("Failed to store transition log",
+			"error", err,
+			"transitionType", transitionType,
+			"entity", entity,
+		)
+	}
+}
+
+// BatchStatistics holds batch processing statistics with MongoDB support
+type BatchStatistics struct {
+	BatchID         string    `bson:"batch_id" json:"batch_id"`
+	TotalMessages   int64     `bson:"total_messages" json:"total_messages"`
+	ProcessedCount  int64     `bson:"processed_count" json:"processed_count"`
+	SuccessCount    int64     `bson:"success_count" json:"success_count"`
+	FailedCount     int64     `bson:"failed_count" json:"failed_count"`
+	PartitionCount  int       `bson:"partition_count" json:"partition_count"`
+	StartTime       time.Time `bson:"start_time" json:"start_time"`
+	EndTime         time.Time `bson:"end_time,omitempty" json:"end_time,omitempty"`
+	DurationSeconds int64     `bson:"duration_seconds,omitempty" json:"duration_seconds,omitempty"`
+	SuccessRate     float64   `bson:"success_rate" json:"success_rate"`
+	ProcessingRate  float64   `bson:"processing_rate" json:"processing_rate"` // messages per second
+	LastUpdated     time.Time `bson:"last_updated" json:"last_updated"`
+}
+
+// StoreBatchStatistics stores batch statistics in MongoDB
+func (h *MongoHelper) StoreBatchStatistics(ctx context.Context, stats *BatchStatistics) error {
+	collection := h.client.Database(h.database).Collection("batch_statistics")
+
+	// Calculate derived fields
+	if stats.TotalMessages > 0 {
+		stats.SuccessRate = float64(stats.SuccessCount) / float64(stats.TotalMessages) * 100
+	}
+
+	if !stats.EndTime.IsZero() {
+		duration := stats.EndTime.Sub(stats.StartTime)
+		stats.DurationSeconds = int64(duration.Seconds())
+		if stats.DurationSeconds > 0 {
+			stats.ProcessingRate = float64(stats.ProcessedCount) / float64(stats.DurationSeconds)
+		}
+	}
+
+	stats.LastUpdated = time.Now()
+
+	// Use upsert to update existing document or insert new one
+	filter := bson.M{"batch_id": stats.BatchID}
+	update := bson.M{"$set": stats}
+	opts := options.Update().SetUpsert(true)
+
+	result, err := collection.UpdateOne(ctx, filter, update, opts)
+	if err != nil {
+		return fmt.Errorf("failed to store batch statistics: %w", err)
+	}
+
+	h.logger.Infow("Stored batch statistics",
+		"batchID", stats.BatchID,
+		"totalMessages", stats.TotalMessages,
+		"successRate", stats.SuccessRate,
+		"upsertedID", result.UpsertedID,
+	)
+
+	return nil
+}
+
+// GetBatchStatistics retrieves batch statistics from MongoDB
+func (h *MongoHelper) GetBatchStatistics(ctx context.Context, batchID string) (*BatchStatistics, error) {
+	collection := h.client.Database(h.database).Collection("batch_statistics")
+
+	filter := bson.M{"batch_id": batchID}
+	var stats BatchStatistics
+
+	err := collection.FindOne(ctx, filter).Decode(&stats)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, fmt.Errorf("batch statistics not found for batch ID: %s", batchID)
+		}
+		return nil, fmt.Errorf("failed to retrieve batch statistics: %w", err)
+	}
+
+	return &stats, nil
+}
+
+// EnsureIndexes creates necessary MongoDB indexes for optimal performance
+func (h *MongoHelper) EnsureIndexes(ctx context.Context) error {
+	database := h.client.Database(h.database)
+
+	// Indexes for partition tasks collection
+	tasksCollection := database.Collection(h.collection)
+	taskIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{"batch_id", 1}},
+			Options: options.Index().SetBackground(true),
+		},
+		{
+			Keys:    bson.D{{"partition_key", 1}},
+			Options: options.Index().SetBackground(true),
+		},
+		{
+			Keys:    bson.D{{"status", 1}},
+			Options: options.Index().SetBackground(true),
+		},
+		{
+			Keys:    bson.D{{"created_at", -1}},
+			Options: options.Index().SetBackground(true),
+		},
+		{
+			Keys:    bson.D{{"batch_id", 1}, {"status", 1}},
+			Options: options.Index().SetBackground(true),
+		},
+	}
+
+	_, err := tasksCollection.Indexes().CreateMany(ctx, taskIndexes)
+	if err != nil {
+		return fmt.Errorf("failed to create task indexes: %w", err)
+	}
+
+	// Indexes for batch statistics collection
+	statsCollection := database.Collection("batch_statistics")
+	statsIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{"batch_id", 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{"start_time", -1}},
+			Options: options.Index().SetBackground(true),
+		},
+		{
+			Keys:    bson.D{{"success_rate", -1}},
+			Options: options.Index().SetBackground(true),
+		},
+	}
+
+	_, err = statsCollection.Indexes().CreateMany(ctx, statsIndexes)
+	if err != nil {
+		return fmt.Errorf("failed to create statistics indexes: %w", err)
+	}
+
+	// Indexes for transition logs collection
+	logsCollection := database.Collection("transition_logs")
+	logIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{"entity", 1}},
+			Options: options.Index().SetBackground(true),
+		},
+		{
+			Keys:    bson.D{{"timestamp", -1}},
+			Options: options.Index().SetBackground(true),
+		},
+		{
+			Keys:    bson.D{{"transition_type", 1}},
+			Options: options.Index().SetBackground(true),
+		},
+		{
+			Keys:    bson.D{{"timestamp", 1}},
+			Options: options.Index().SetBackground(true).SetExpireAfterSeconds(int32(30 * 24 * 3600)), // 30 days TTL
+		},
+	}
+
+	_, err = logsCollection.Indexes().CreateMany(ctx, logIndexes)
+	if err != nil {
+		return fmt.Errorf("failed to create log indexes: %w", err)
+	}
+
+	h.logger.Infow("Successfully created MongoDB indexes",
+		"database", h.database,
+		"collections", []string{h.collection, "batch_statistics", "transition_logs"},
+	)
+
+	return nil
 }
