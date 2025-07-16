@@ -36,11 +36,31 @@ build: go.tidy  ## 编译源码，依赖 tidy 目标自动添加/移除依赖包
 
 build.nightwatch: go.tidy ## 编译 nightwatch 服务.
 	@echo "===========> Building nightwatch binary"
+	@mkdir -p bin
 	@go build -o bin/nightwatch ./cmd/nightwatch
 
 build.apiserver: go.tidy ## 编译 apiserver 服务.
 	@echo "===========> Building apiserver binary"
+	@mkdir -p bin
 	@go build -o bin/mb-apiserver ./cmd/mb-apiserver
+
+build.gen-gorm-model: go.tidy ## 编译 gen-gorm-model 工具.
+	@echo "===========> Building gen-gorm-model tool"
+	@mkdir -p bin
+	@go build -o bin/gen-gorm-model ./cmd/gen-gorm-model
+
+build.messagebatch: build.nightwatch ## 构建包含messagebatch watcher的nightwatch服务.
+	@echo "===========> Building nightwatch with messagebatch watcher support"
+	@echo "===========> MessageBatch watcher included in nightwatch binary"
+
+build.all: build.nightwatch build.apiserver build.gen-gorm-model ## 构建所有二进制文件到bin目录.
+	@echo "===========> All binaries built successfully in bin/ directory"
+	@ls -la bin/
+
+verify.messagebatch: ## 验证messagebatch组件编译无误.
+	@echo "===========> Verifying messagebatch components"
+	@go build -o /dev/null ./internal/nightwatch/watcher/job/messagebatch/...
+	@echo "===========> MessageBatch components verified successfully"
 
 ## --------------------------------------
 ## Testing
@@ -63,6 +83,8 @@ cover: ## 执行单元测试，并校验覆盖率阈值.
 clean: ## 清理构建产物、临时文件等. 例如 _output 目录.
 	@echo "===========> Cleaning all build output"
 	@-rm -vrf $(OUTPUT_DIR)
+	@-rm -vrf bin/
+	@echo "===========> Cleaned _output and bin directories"
 
 ## --------------------------------------
 ## Lint / Verification
@@ -149,5 +171,6 @@ help: Makefile ## 打印 Makefile help 信息.
 
 # 伪目标（防止文件与目标名称冲突）
 .PHONY: all build test cover clean lint tidy format ca protoc swagger serve-swagger add-copyright help \
-	build.nightwatch build.apiserver run.nightwatch run.apiserver stop.nightwatch stop.apiserver \
+	build.nightwatch build.apiserver build.gen-gorm-model build.messagebatch build.all verify.messagebatch \
+	run.nightwatch run.apiserver stop.nightwatch stop.apiserver \
 	restart.nightwatch restart.apiserver wire.nightwatch wire.apiserver wire
