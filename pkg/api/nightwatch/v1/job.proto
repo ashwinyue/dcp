@@ -40,6 +40,7 @@ message Job {
 
 message JobParams{
   TrainParams train = 1;
+  MessageBatchParams messageBatch = 2;
 }
 
 message TrainParams {
@@ -48,9 +49,23 @@ message TrainParams {
   int64 batchSize = 3;
 }
 
+message MessageBatchParams {
+  int64 idempotentExecution = 1;
+  int64 jobTimeout = 2;
+  int64 batchSize = 3;
+  int64 partitionCount = 4;
+  int64 maxRetries = 5;
+  string sourceType = 6;
+  string targetType = 7;
+  repeated string recipients = 8;
+  string template = 9;
+  string messageType = 10;
+}
+
 message JobResults{
   TrainResults train = 1;
   BatchResults batch = 2;
+  MessageBatchResults messageBatch = 3;
 }
 
 message BatchResults {
@@ -60,6 +75,46 @@ message BatchResults {
   optional int64 processed = 4;
   optional int64 total = 5;
   optional float percent = 6;
+}
+
+message MessageBatchResults {
+  optional string batchID = 1;
+  optional MessageBatchPhaseStats preparationStats = 2;
+  optional MessageBatchPhaseStats deliveryStats = 3;
+  optional int64 totalMessages = 4;
+  optional int64 processedMessages = 5;
+  optional int64 successMessages = 6;
+  optional int64 failedMessages = 7;
+  optional float progressPercent = 8;
+  optional string currentPhase = 9;
+  optional string currentState = 10;
+  repeated MessageBatchPartitionStatus partitionStatuses = 11;
+  optional string errorMessage = 12;
+  optional int64 retryCount = 13;
+}
+
+message MessageBatchPhaseStats {
+  optional int64 total = 1;
+  optional int64 processed = 2;
+  optional int64 success = 3;
+  optional int64 failed = 4;
+  optional float percent = 5;
+  optional int64 startTime = 6;
+  optional int64 endTime = 7;
+  optional int64 durationSeconds = 8;
+  optional int64 retryCount = 9;
+  optional int64 partitions = 10;
+}
+
+message MessageBatchPartitionStatus {
+  int32 partitionID = 1;
+  string status = 2;
+  int64 processedCount = 3;
+  int64 failedCount = 4;
+  optional int64 startTime = 5;
+  optional int64 endTime = 6;
+  optional string errorMessage = 7;
+  int32 retryCount = 8;
 }
 
 message TrainResults {

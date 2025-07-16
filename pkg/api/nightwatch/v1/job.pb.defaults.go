@@ -23,10 +23,22 @@ func (x *JobParams) Default() {
 func (x *TrainParams) Default() {
 }
 
+func (x *MessageBatchParams) Default() {
+}
+
 func (x *JobResults) Default() {
 }
 
 func (x *BatchResults) Default() {
+}
+
+func (x *MessageBatchResults) Default() {
+}
+
+func (x *MessageBatchPhaseStats) Default() {
+}
+
+func (x *MessageBatchPartitionStatus) Default() {
 }
 
 func (x *TrainResults) Default() {

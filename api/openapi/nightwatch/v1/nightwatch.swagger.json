@@ -1039,6 +1039,9 @@
       "properties": {
         "train": {
           "$ref": "#/definitions/v1TrainParams"
+        },
+        "messageBatch": {
+          "$ref": "#/definitions/v1MessageBatchParams"
         }
       }
     },
@@ -1050,6 +1053,9 @@
         },
         "batch": {
           "$ref": "#/definitions/v1BatchResults"
+        },
+        "messageBatch": {
+          "$ref": "#/definitions/v1MessageBatchResults"
         }
       }
     },
@@ -1082,6 +1088,183 @@
             "type": "object",
             "$ref": "#/definitions/v1Job"
           }
+        }
+      }
+    },
+    "v1MessageBatchParams": {
+      "type": "object",
+      "properties": {
+        "idempotentExecution": {
+          "type": "string",
+          "format": "int64"
+        },
+        "jobTimeout": {
+          "type": "string",
+          "format": "int64"
+        },
+        "batchSize": {
+          "type": "string",
+          "format": "int64"
+        },
+        "partitionCount": {
+          "type": "string",
+          "format": "int64"
+        },
+        "maxRetries": {
+          "type": "string",
+          "format": "int64"
+        },
+        "sourceType": {
+          "type": "string"
+        },
+        "targetType": {
+          "type": "string"
+        },
+        "recipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "template": {
+          "type": "string"
+        },
+        "messageType": {
+          "type": "string"
+        }
+      }
+    },
+    "v1MessageBatchPartitionStatus": {
+      "type": "object",
+      "properties": {
+        "partitionID": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "status": {
+          "type": "string"
+        },
+        "processedCount": {
+          "type": "string",
+          "format": "int64"
+        },
+        "failedCount": {
+          "type": "string",
+          "format": "int64"
+        },
+        "startTime": {
+          "type": "string",
+          "format": "int64"
+        },
+        "endTime": {
+          "type": "string",
+          "format": "int64"
+        },
+        "errorMessage": {
+          "type": "string"
+        },
+        "retryCount": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "v1MessageBatchPhaseStats": {
+      "type": "object",
+      "properties": {
+        "total": {
+          "type": "string",
+          "format": "int64"
+        },
+        "processed": {
+          "type": "string",
+          "format": "int64"
+        },
+        "success": {
+          "type": "string",
+          "format": "int64"
+        },
+        "failed": {
+          "type": "string",
+          "format": "int64"
+        },
+        "percent": {
+          "type": "number",
+          "format": "float"
+        },
+        "startTime": {
+          "type": "string",
+          "format": "int64"
+        },
+        "endTime": {
+          "type": "string",
+          "format": "int64"
+        },
+        "durationSeconds": {
+          "type": "string",
+          "format": "int64"
+        },
+        "retryCount": {
+          "type": "string",
+          "format": "int64"
+        },
+        "partitions": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "v1MessageBatchResults": {
+      "type": "object",
+      "properties": {
+        "batchID": {
+          "type": "string"
+        },
+        "preparationStats": {
+          "$ref": "#/definitions/v1MessageBatchPhaseStats"
+        },
+        "deliveryStats": {
+          "$ref": "#/definitions/v1MessageBatchPhaseStats"
+        },
+        "totalMessages": {
+          "type": "string",
+          "format": "int64"
+        },
+        "processedMessages": {
+          "type": "string",
+          "format": "int64"
+        },
+        "successMessages": {
+          "type": "string",
+          "format": "int64"
+        },
+        "failedMessages": {
+          "type": "string",
+          "format": "int64"
+        },
+        "progressPercent": {
+          "type": "number",
+          "format": "float"
+        },
+        "currentPhase": {
+          "type": "string"
+        },
+        "currentState": {
+          "type": "string"
+        },
+        "partitionStatuses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1MessageBatchPartitionStatus"
+          }
+        },
+        "errorMessage": {
+          "type": "string"
+        },
+        "retryCount": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },
