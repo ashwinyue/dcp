@@ -21,11 +21,10 @@ type KafkaAdapter struct {
 }
 
 // NewKafkaAdapter 创建Kafka适配器
-func NewKafkaAdapter(options *genericoptions.KafkaOptions, logger log.Logger) (*KafkaAdapter, error) {
-	if options == nil {
-		return nil, fmt.Errorf("kafka options cannot be nil")
-	}
-
+func NewKafkaAdapter(logger log.Logger) (*KafkaAdapter, error) {
+	// 使用NewKafkaOptions创建默认配置
+	options := genericoptions.NewKafkaOptions()
+	
 	// 创建Kafka writer
 	writer, err := options.Writer()
 	if err != nil {

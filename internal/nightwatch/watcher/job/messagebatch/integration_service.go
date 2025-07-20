@@ -31,7 +31,7 @@ func NewIntegrationService(
 	mongoAdapter := NewMongoDBAdapter(mongoDB, logger)
 	
 	// 创建Kafka适配器
-	kafkaAdapter, err := NewKafkaAdapter(kafkaOptions, logger)
+	kafkaAdapter, err := NewKafkaAdapter(logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kafka adapter: %w", err)
 	}

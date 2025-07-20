@@ -2,6 +2,8 @@ module github.com/ashwinyue/dcp
 
 go 1.23.5
 
+replace github.com/onexstack/onexstack => ./staging/src/github.com/onexstack/onexstack
+
 require (
 	github.com/gammazero/workerpool v1.1.3
 	github.com/gin-contrib/pprof v1.4.0
@@ -35,7 +37,7 @@ require (
 	gorm.io/driver/sqlite v1.4.3
 	gorm.io/gen v0.3.23
 	gorm.io/gorm v1.25.12
-	k8s.io/apimachinery v0.32.1
+	k8s.io/apimachinery v0.32.2
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/utils v0.0.0-20241210054802-24370beab758
 )
@@ -141,7 +143,6 @@ require (
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
-	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
@@ -181,7 +182,7 @@ require (
 	gorm.io/driver/sqlserver v1.5.3 // indirect
 	gorm.io/hints v1.1.0 // indirect
 	gorm.io/plugin/dbresolver v1.5.3 // indirect
-	k8s.io/component-base v0.32.1 // indirect
+	k8s.io/component-base v0.32.2 // indirect
 	modernc.org/libc v1.22.2 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
 	modernc.org/memory v1.5.0 // indirect
