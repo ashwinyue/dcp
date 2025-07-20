@@ -21,12 +21,20 @@ const (
 // Job Scope defines the scope of the job for organizational purposes.
 const (
 	LLMJobScope = "llm"
+	// MessageBatchJobScope defines the scope for message batch jobs.
+	MessageBatchJobScope = "message-batch"
+	// SMSJobScope defines the scope for SMS-related jobs.
+	SMSJobScope = "sms"
 )
 
 // Job Watcher identifiers for monitoring specific job types.
 const (
 	// TrainWatcher identifier for llm train job watcher.
 	LLMTrainWatcher = "llmtrain"
+	// MessageBatchWatcher is the name of the message batch watcher.
+	MessageBatchWatcher = "messagebatch"
+	// SmsBatchWatcher is the name of the SMS batch watcher.
+	SmsBatchWatcher = "smsbatch"
 )
 
 const (

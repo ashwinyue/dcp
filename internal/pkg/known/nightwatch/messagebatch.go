@@ -149,14 +149,6 @@ const (
 	MessageBatchMessagingQPS = 80
 )
 
-// Message Batch job scope and watcher identifiers
-const (
-	// MessageBatchJobScope defines the scope for message batch jobs.
-	MessageBatchJobScope = "messagebatch"
-	// MessageBatchWatcher defines the watcher name for message batch jobs.
-	MessageBatchWatcher = "messagebatch"
-)
-
 // Message Batch processing timeout durations
 var (
 	// MessageBatchPreparationProcessTimeout defines the timeout for preparation processing

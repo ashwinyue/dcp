@@ -7,6 +7,7 @@ import (
 	"github.com/looplab/fsm"
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
+	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
 	fsmutil "github.com/ashwinyue/dcp/internal/pkg/util/fsm"
 	v1 "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1"
@@ -24,7 +25,7 @@ const (
 const (
 	// Initial state
 	StateInitial = "INITIAL"
-	
+
 	// Preparation states
 	StatePreparationReady     = "PREPARATION_READY"
 	StatePreparationRunning   = "PREPARATION_RUNNING"
@@ -32,7 +33,7 @@ const (
 	StatePreparationPaused    = "PREPARATION_PAUSED"
 	StatePreparationCompleted = "PREPARATION_COMPLETED"
 	StatePreparationFailed    = "PREPARATION_FAILED"
-	
+
 	// Delivery states
 	StateDeliveryReady     = "DELIVERY_READY"
 	StateDeliveryRunning   = "DELIVERY_RUNNING"
@@ -40,7 +41,7 @@ const (
 	StateDeliveryPaused    = "DELIVERY_PAUSED"
 	StateDeliveryCompleted = "DELIVERY_COMPLETED"
 	StateDeliveryFailed    = "DELIVERY_FAILED"
-	
+
 	// Final states
 	StateSucceeded = "SUCCEEDED"
 	StateFailed    = "FAILED"
@@ -58,7 +59,7 @@ const (
 	EventPrepareComplete = "PREPARE_COMPLETE"
 	EventPrepareFail     = "PREPARE_FAIL"
 	EventPrepareRetry    = "PREPARE_RETRY"
-	
+
 	// Delivery events
 	EventDeliveryStart    = "DELIVERY_START"
 	EventDeliveryBegin    = "DELIVERY_BEGIN"
@@ -68,14 +69,12 @@ const (
 	EventDeliveryComplete = "DELIVERY_COMPLETE"
 	EventDeliveryFail     = "DELIVERY_FAIL"
 	EventDeliveryRetry    = "DELIVERY_RETRY"
-	
+
 	// Final events
 	EventComplete = "COMPLETE"
 	EventFail     = "FAIL"
 	EventCancel   = "CANCEL"
 )
-
-
 
 // StateMachine represents a finite state machine for managing message batch jobs.
 type StateMachine struct {
@@ -99,6 +98,15 @@ func NewStateMachine(initial string, watcher *Watcher, job *model.JobM) *StateMa
 		CurrentStep: StepPreparation, // Start with preparation step
 		logger:      log.New(nil),
 		stats:       make(map[string]*PhaseStatistics),
+	}
+
+	// Initialize job-specific statistics
+	if job.Scope == known.SMSJobScope {
+		sm.stats["sms_preparation"] = &PhaseStatistics{StartTime: time.Now()}
+		sm.stats["sms_delivery"] = &PhaseStatistics{}
+	} else {
+		sm.stats["message_preparation"] = &PhaseStatistics{StartTime: time.Now()}
+		sm.stats["message_delivery"] = &PhaseStatistics{}
 	}
 
 	sm.FSM = fsm.NewFSM(
@@ -132,19 +140,19 @@ func NewStateMachine(initial string, watcher *Watcher, job *model.JobM) *StateMa
 		fsm.Callbacks{
 			// enter_state 先于 enter_xxx 执行。
 			"enter_state": fsmutil.WrapEvent(sm.EnterState),
-			
+
 			// Preparation state callbacks
 			"enter_" + StatePreparationReady:     fsmutil.WrapEvent(sm.EnterPreparationReady),
 			"enter_" + StatePreparationRunning:   fsmutil.WrapEvent(sm.StartPreparation),
 			"enter_" + StatePreparationCompleted: fsmutil.WrapEvent(sm.CompletePreparation),
 			"enter_" + StatePreparationFailed:    fsmutil.WrapEvent(sm.FailPreparation),
-			
+
 			// Delivery state callbacks
 			"enter_" + StateDeliveryReady:     fsmutil.WrapEvent(sm.EnterDeliveryReady),
 			"enter_" + StateDeliveryRunning:   fsmutil.WrapEvent(sm.StartDelivery),
 			"enter_" + StateDeliveryCompleted: fsmutil.WrapEvent(sm.CompleteDelivery),
 			"enter_" + StateDeliveryFailed:    fsmutil.WrapEvent(sm.FailDelivery),
-			
+
 			// Final state callbacks
 			"enter_" + StateSucceeded: fsmutil.WrapEvent(sm.Complete),
 			"enter_" + StateFailed:    fsmutil.WrapEvent(sm.Fail),
@@ -174,7 +182,7 @@ func (usm *StateMachine) TriggerEvent(event string) error {
 	if err != nil {
 		return err
 	}
-	
+
 	// Trigger status change callback
 	newState := usm.FSM.Current()
 	if oldState != newState {
@@ -182,7 +190,7 @@ func (usm *StateMachine) TriggerEvent(event string) error {
 			// Handle status change through watcher
 		}
 	}
-	
+
 	return nil
 }
 
@@ -201,8 +209,6 @@ func (usm *StateMachine) GetAllStatistics() map[string]*PhaseStatistics {
 	// TODO: Implement statistics tracking
 	return make(map[string]*PhaseStatistics)
 }
-
-
 
 // isTimeout checks if the batch processing has timed out
 func (usm *StateMachine) isTimeout() bool {
@@ -233,11 +239,24 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 
 	results := (*v1.JobResults)(usm.Job.Results)
 
-	// Initialize MessageBatch if needed
-	if results.MessageBatch == nil {
-		results.MessageBatch = &v1.MessageBatchResults{}
+	// Handle different job scopes
+	if usm.Job.Scope == known.SMSJobScope {
+		// Initialize SmsBatch if needed
+		if results.SmsBatch == nil {
+			results.SmsBatch = &v1.SmsBatchResults{}
+		}
+		return usm.saveSMSStatistics(ctx, results)
+	} else {
+		// Initialize MessageBatch if needed
+		if results.MessageBatch == nil {
+			results.MessageBatch = &v1.MessageBatchResults{}
+		}
+		return usm.saveMessageStatistics(ctx, results)
 	}
+}
 
+// saveMessageStatistics saves message batch statistics
+func (usm *StateMachine) saveMessageStatistics(ctx context.Context, results *v1.JobResults) error {
 	// Save preparation statistics
 	if prepStats := usm.GetStatistics("PREPARATION"); prepStats != nil {
 		startTime := prepStats.StartTime.Unix()
@@ -261,9 +280,9 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 			results.MessageBatch.PreparationStats.EndTime = &endTime
 		}
 		if prepStats.Duration != nil {
-            durationSeconds := int64(*prepStats.Duration)
-            results.MessageBatch.PreparationStats.DurationSeconds = &durationSeconds
-        }
+			durationSeconds := int64(*prepStats.Duration)
+			results.MessageBatch.PreparationStats.DurationSeconds = &durationSeconds
+		}
 	}
 
 	// Save delivery statistics
@@ -289,9 +308,9 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 			results.MessageBatch.DeliveryStats.EndTime = &endTime
 		}
 		if deliveryStats.Duration != nil {
-            deliveryDurationSeconds := int64(*deliveryStats.Duration)
-            results.MessageBatch.DeliveryStats.DurationSeconds = &deliveryDurationSeconds
-        }
+			deliveryDurationSeconds := int64(*deliveryStats.Duration)
+			results.MessageBatch.DeliveryStats.DurationSeconds = &deliveryDurationSeconds
+		}
 	}
 
 	// Update overall batch status
@@ -302,6 +321,76 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 	results.MessageBatch.CurrentPhase = &currentPhase
 	results.MessageBatch.CurrentState = &currentState
 	results.MessageBatch.RetryCount = &batchRetryCount
+
+	return nil
+}
+
+// saveSMSStatistics saves SMS batch statistics
+func (usm *StateMachine) saveSMSStatistics(ctx context.Context, results *v1.JobResults) error {
+	// Save preparation statistics
+	if prepStats := usm.GetStatistics("PREPARATION"); prepStats != nil {
+		startTime := prepStats.StartTime.Unix()
+		retryCount := int64(prepStats.RetryCount)
+		partitions := int64(prepStats.Partitions)
+
+		percent := float32(prepStats.Percent)
+		results.SmsBatch.PreparationStats = &v1.SmsBatchPhaseStats{
+			Total:      &prepStats.Total,
+			Processed:  &prepStats.Processed,
+			Success:    &prepStats.Success,
+			Failed:     &prepStats.Failed,
+			Percent:    &percent,
+			StartTime:  &startTime,
+			RetryCount: &retryCount,
+			Partitions: &partitions,
+		}
+
+		if prepStats.EndTime != nil {
+			endTime := prepStats.EndTime.Unix()
+			results.SmsBatch.PreparationStats.EndTime = &endTime
+		}
+		if prepStats.Duration != nil {
+			durationSeconds := int64(*prepStats.Duration)
+			results.SmsBatch.PreparationStats.DurationSeconds = &durationSeconds
+		}
+	}
+
+	// Save delivery statistics
+	if deliveryStats := usm.GetStatistics("DELIVERY"); deliveryStats != nil {
+		startTime := deliveryStats.StartTime.Unix()
+		retryCount := int64(deliveryStats.RetryCount)
+		partitions := int64(deliveryStats.Partitions)
+
+		deliveryPercent := float32(deliveryStats.Percent)
+		results.SmsBatch.DeliveryStats = &v1.SmsBatchPhaseStats{
+			Total:      &deliveryStats.Total,
+			Processed:  &deliveryStats.Processed,
+			Success:    &deliveryStats.Success,
+			Failed:     &deliveryStats.Failed,
+			Percent:    &deliveryPercent,
+			StartTime:  &startTime,
+			RetryCount: &retryCount,
+			Partitions: &partitions,
+		}
+
+		if deliveryStats.EndTime != nil {
+			endTime := deliveryStats.EndTime.Unix()
+			results.SmsBatch.DeliveryStats.EndTime = &endTime
+		}
+		if deliveryStats.Duration != nil {
+			deliveryDurationSeconds := int64(*deliveryStats.Duration)
+			results.SmsBatch.DeliveryStats.DurationSeconds = &deliveryDurationSeconds
+		}
+	}
+
+	// Update overall batch status
+	currentPhase := usm.getCurrentPhase()
+	currentState := usm.Job.Status
+	batchRetryCount := int64(usm.retryCount)
+
+	results.SmsBatch.CurrentPhase = &currentPhase
+	results.SmsBatch.CurrentState = &currentState
+	results.SmsBatch.RetryCount = &batchRetryCount
 
 	return nil
 }

@@ -2,7 +2,6 @@ package messagebatch
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/looplab/fsm"
@@ -17,15 +16,34 @@ import (
 // OnPreparationReady handles the PREPARATION_READY state
 // Equivalent to AbstractStep.doReady() and SmsBatch.entryProcess()
 func (usm *StateMachine) OnPreparationReady(ctx context.Context, e *fsm.Event) {
-	usm.logger.Infow("Entering PREPARATION_READY state", "job_id", usm.Job.JobID)
+	usm.logger.Infow("Entering PREPARATION_READY state", "job_id", usm.Job.JobID, "scope", usm.Job.Scope)
 
-	// Check if batch has provider (equivalent to SmsBatch.hasProvider())
-	if usm.Job.Params == nil || usm.Job.Params.MessageBatch == nil {
-		usm.logger.Errorw("Batch provider not configured", "job_id", usm.Job.JobID)
+	// Check if batch has provider based on job scope
+	if usm.Job.Params == nil {
+		usm.logger.Errorw("Job params not configured", "job_id", usm.Job.JobID)
 		if triggerErr := usm.TriggerEvent(EventFail); triggerErr != nil {
 			usm.logger.Errorw("Failed to trigger failure event", "job_id", usm.Job.JobID, "error", triggerErr)
 		}
 		return
+	}
+
+	// Validate params based on job scope
+	if usm.Job.Scope == known.SMSJobScope {
+		if usm.Job.Params.SmsBatch == nil {
+			usm.logger.Errorw("SMS batch params not configured", "job_id", usm.Job.JobID)
+			if triggerErr := usm.TriggerEvent(EventFail); triggerErr != nil {
+				usm.logger.Errorw("Failed to trigger failure event", "job_id", usm.Job.JobID, "error", triggerErr)
+			}
+			return
+		}
+	} else {
+		if usm.Job.Params.MessageBatch == nil {
+			usm.logger.Errorw("Message batch params not configured", "job_id", usm.Job.JobID)
+			if triggerErr := usm.TriggerEvent(EventFail); triggerErr != nil {
+				usm.logger.Errorw("Failed to trigger failure event", "job_id", usm.Job.JobID, "error", triggerErr)
+			}
+			return
+		}
 	}
 
 	// Initialize preparation work (equivalent to SmsPreparationStep.doReady())
@@ -38,22 +56,21 @@ func (usm *StateMachine) OnPreparationReady(ctx context.Context, e *fsm.Event) {
 	}
 
 	// Call phase start callback (equivalent to business callback)
-	if usm.CallbackHandler != nil {
-		if err := usm.CallbackHandler.OnPhaseStart(ctx, usm.Job.JobID, "PREPARATION"); err != nil {
+	if usm.callbackHandler != nil {
+		if err := usm.callbackHandler.OnPhaseStart(ctx, usm.Job.JobID, "PREPARATION"); err != nil {
 			usm.logger.Errorw("Phase start callback failed", "job_id", usm.Job.JobID, "error", err)
 		}
 	}
 
-	// Update job status and current step
+	// Update job status
 	usm.Job.Status = "PREPARATION_READY"
 	usm.Job.UpdatedAt = time.Now()
 	if usm.Job.Results == nil {
 		usm.Job.Results = &model.JobResults{}
 	}
-	usm.Job.Results.MessageBatch.CurrentPhase = "PREPARATION"
 
 	// Save job state
-	if err := usm.Store.SaveJob(ctx, usm.Job); err != nil {
+	if err := usm.Watcher.store.Job().Update(ctx, usm.Job); err != nil {
 		usm.logger.Errorw("Failed to save job state", "job_id", usm.Job.JobID, "error", err)
 	}
 
@@ -68,15 +85,12 @@ func (usm *StateMachine) OnPreparationReady(ctx context.Context, e *fsm.Event) {
 func (usm *StateMachine) OnPreparationRunning(ctx context.Context, e *fsm.Event) {
 	usm.logger.Infow("Entering PREPARATION_RUNNING state", "job_id", usm.Job.JobID)
 
-	// Update job status and current step (equivalent to SmsBatch.setCurrentStep)
+	// Update job status (equivalent to SmsBatch.setCurrentStep)
 	usm.Job.Status = "PREPARATION_RUNNING"
 	usm.Job.UpdatedAt = time.Now()
-	if usm.Job.Results != nil {
-		usm.Job.Results.CurrentStep = "PREPARATION"
-	}
 
 	// Save job state
-	if err := usm.Store.SaveJob(ctx, usm.Job); err != nil {
+	if err := usm.Watcher.store.Job().Update(ctx, usm.Job); err != nil {
 		usm.logger.Errorw("Failed to save job state", "job_id", usm.Job.JobID, "error", err)
 	}
 
@@ -95,8 +109,8 @@ func (usm *StateMachine) OnPreparationRunning(ctx context.Context, e *fsm.Event)
 			usm.logger.Errorw("Preparation execution failed", "job_id", usm.Job.JobID, "error", err)
 
 			// Trigger phase failed callback
-			if usm.CallbackHandler != nil {
-				if callbackErr := usm.CallbackHandler.OnPhaseFailed(ctx, usm.Job.JobID, "PREPARATION", err, usm.GetStatistics("PREPARATION")); callbackErr != nil {
+			if usm.callbackHandler != nil {
+				if callbackErr := usm.callbackHandler.OnPhaseFailed(ctx, usm.Job.JobID, "PREPARATION", err, usm.GetStatistics("PREPARATION")); callbackErr != nil {
 					usm.logger.Errorw("Phase failed callback error", "job_id", usm.Job.JobID, "error", callbackErr)
 				}
 			}
@@ -109,8 +123,8 @@ func (usm *StateMachine) OnPreparationRunning(ctx context.Context, e *fsm.Event)
 		}
 
 		// Trigger progress callback
-		if usm.CallbackHandler != nil {
-			if err := usm.CallbackHandler.OnPhaseProgress(ctx, usm.Job.JobID, "PREPARATION", usm.GetStatistics("PREPARATION")); err != nil {
+		if usm.callbackHandler != nil {
+			if err := usm.callbackHandler.OnPhaseProgress(ctx, usm.Job.JobID, "PREPARATION", usm.GetStatistics("PREPARATION")); err != nil {
 				usm.logger.Errorw("Phase progress callback failed", "job_id", usm.Job.JobID, "error", err)
 			}
 		}
@@ -135,7 +149,7 @@ func (usm *StateMachine) OnPreparationPausing(ctx context.Context, e *fsm.Event)
 	usm.Job.UpdatedAt = time.Now()
 
 	// Save job state (equivalent to smsBatchRepository.save)
-	if err := usm.Store.SaveJob(ctx, usm.Job); err != nil {
+	if err := usm.Watcher.store.Job().Update(ctx, usm.Job); err != nil {
 		usm.logger.Errorw("Failed to save job state", "job_id", usm.Job.JobID, "error", err)
 	}
 
@@ -172,7 +186,7 @@ func (usm *StateMachine) OnPreparationPaused(ctx context.Context, e *fsm.Event) 
 	}
 
 	// Save job state (equivalent to smsBatchRepository.save)
-	if err := usm.Store.SaveJob(ctx, usm.Job); err != nil {
+	if err := usm.Watcher.store.Job().Update(ctx, usm.Job); err != nil {
 		usm.logger.Errorw("Failed to save job state", "job_id", usm.Job.JobID, "error", err)
 	}
 
@@ -198,9 +212,6 @@ func (usm *StateMachine) OnPreparationCompleted(ctx context.Context, e *fsm.Even
 	// Update job status and prepare for next step
 	usm.Job.Status = "PREPARATION_COMPLETED"
 	usm.Job.UpdatedAt = time.Now()
-	if usm.Job.Results != nil {
-		usm.Job.Results.CurrentStep = "DELIVERY" // Transition to delivery step
-	}
 
 	// Save preparation results
 	if err := usm.savePreparationResults(ctx); err != nil {
@@ -209,8 +220,8 @@ func (usm *StateMachine) OnPreparationCompleted(ctx context.Context, e *fsm.Even
 	}
 
 	// Trigger phase completed callback
-	if usm.CallbackHandler != nil {
-		if err := usm.CallbackHandler.OnPhaseComplete(ctx, usm.Job.JobID, "PREPARATION", usm.GetStatistics("PREPARATION")); err != nil {
+	if usm.callbackHandler != nil {
+		if err := usm.callbackHandler.OnPhaseComplete(ctx, usm.Job.JobID, "PREPARATION", usm.GetStatistics("PREPARATION")); err != nil {
 			usm.logger.Errorw("Phase completed callback failed", "job_id", usm.Job.JobID, "error", err)
 		}
 	}
@@ -220,7 +231,7 @@ func (usm *StateMachine) OnPreparationCompleted(ctx context.Context, e *fsm.Even
 	usm.Job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.Job.Conditions), cond))
 
 	// Save job state
-	if err := usm.Store.SaveJob(ctx, usm.Job); err != nil {
+	if err := usm.Watcher.store.Job().Update(ctx, usm.Job); err != nil {
 		usm.logger.Errorw("Failed to save job state", "job_id", usm.Job.JobID, "error", err)
 	}
 
@@ -258,13 +269,8 @@ func (usm *StateMachine) OnPreparationFailed(ctx context.Context, e *fsm.Event) 
 		usm.retryCount++
 		usm.logger.Infow("Retrying preparation phase", "job_id", usm.Job.JobID, "retry_count", usm.retryCount)
 
-		// Update retry count in job
-		if usm.Job.Results != nil {
-			usm.Job.Results.RetryCount = usm.retryCount
-		}
-
 		// Save job state before retry
-		if err := usm.Store.SaveJob(ctx, usm.Job); err != nil {
+		if err := usm.Watcher.store.Job().Update(ctx, usm.Job); err != nil {
 			usm.logger.Errorw("Failed to save job state before retry", "job_id", usm.Job.JobID, "error", err)
 		}
 
@@ -278,16 +284,12 @@ func (usm *StateMachine) OnPreparationFailed(ctx context.Context, e *fsm.Event) 
 		usm.Job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.Job.Conditions), cond))
 
 		// Save final job state
-		if err := usm.Store.SaveJob(ctx, usm.Job); err != nil {
+		if err := usm.Watcher.store.Job().Update(ctx, usm.Job); err != nil {
 			usm.logger.Errorw("Failed to save final job state", "job_id", usm.Job.JobID, "error", err)
 		}
 
-		// Trigger error callback
-		if usm.CallbackHandler != nil {
-			if err := usm.CallbackHandler.OnError(ctx, usm.Job.JobID, "PREPARATION", fmt.Errorf("preparation failed after %d retries", usm.retryCount)); err != nil {
-				usm.logger.Errorw("Error callback failed", "job_id", usm.Job.JobID, "error", err)
-			}
-		}
+		// Log final failure
+		usm.logger.Errorw("Preparation failed permanently", "job_id", usm.Job.JobID, "retry_count", usm.retryCount)
 	}
 }
 
