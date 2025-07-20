@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package nightwatch.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nightwatch/v1/job.proto";
+
+option go_package = "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1;v1";
+
+// MessageBatchJob represents a message batch processing job
+message MessageBatchJob {
+    string id = 1;
+    string batchID = 2;
+    string userID = 3;
+    string name = 4;
+    string description = 5;
+    MessageBatchJobStatus status = 6;
+    MessageBatchJobParams params = 7;
+    MessageBatchJobResults results = 8;
+    repeated MessageBatchJobCondition conditions = 9;
+    google.protobuf.Timestamp createdAt = 10;
+    google.protobuf.Timestamp updatedAt = 11;
+    google.protobuf.Timestamp startedAt = 12;
+    google.protobuf.Timestamp completedAt = 13;
+}
+
+// MessageBatchJobStatus represents the status of a message batch job
+enum MessageBatchJobStatus {
+    MESSAGE_BATCH_JOB_STATUS_UNSPECIFIED = 0;
+    MESSAGE_BATCH_JOB_STATUS_PENDING = 1;
+    MESSAGE_BATCH_JOB_STATUS_PROCESSING = 2;
+    MESSAGE_BATCH_JOB_STATUS_PARTIAL_COMPLETE = 3;
+    MESSAGE_BATCH_JOB_STATUS_COMPLETE = 4;
+    MESSAGE_BATCH_JOB_STATUS_FAILED = 5;
+    MESSAGE_BATCH_JOB_STATUS_CANCELLED = 6;
+    MESSAGE_BATCH_JOB_STATUS_RETRYING = 7;
+}
+
+// MessageBatchJobParams contains parameters for message batch processing
+message MessageBatchJobParams {
+    int64 batchSize = 1;
+    int64 partitionCount = 2;
+    int64 maxRetries = 3;
+    int64 timeout = 4;
+    string sourceType = 5;
+    string targetType = 6;
+    repeated string recipients = 7;
+    string template = 8;
+    string messageType = 9;
+    int64 concurrency = 10;
+}
+
+// MessageBatchJobResults contains the results of message batch processing
+message MessageBatchJobResults {
+    string batchID = 1;
+    MessageBatchPhaseStats preparationStats = 2;
+    MessageBatchPhaseStats deliveryStats = 3;
+    int64 totalMessages = 4;
+    int64 processedMessages = 5;
+    int64 successMessages = 6;
+    int64 failedMessages = 7;
+    float progressPercent = 8;
+    string currentPhase = 9;
+    string currentState = 10;
+    repeated MessageBatchPartitionStatus partitionStatuses = 11;
+    string errorMessage = 12;
+    int64 retryCount = 13;
+}
+
+// MessageBatchJobCondition represents a condition of the job
+message MessageBatchJobCondition {
+    string type = 1;
+    string status = 2;
+    string message = 3;
+    string lastTransitionTime = 4;
+}
+
+// Request and Response messages for CRUD operations
+message CreateMessageBatchJobRequest {
+    MessageBatchJob job = 1;
+}
+
+message CreateMessageBatchJobResponse {
+    string jobID = 1;
+}
+
+message UpdateMessageBatchJobRequest {
+    string jobID = 1;
+    optional string name = 2;
+    optional string description = 3;
+    optional MessageBatchJobParams params = 4;
+    optional MessageBatchJobResults results = 5;
+    optional MessageBatchJobStatus status = 6;
+}
+
+message UpdateMessageBatchJobResponse {
+}
+
+message DeleteMessageBatchJobRequest {
+    repeated string jobIDs = 1;
+}
+
+message DeleteMessageBatchJobResponse {
+}
+
+message GetMessageBatchJobRequest {
+    // @gotags: uri:"jobID"
+    string jobID = 1;
+}
+
+message GetMessageBatchJobResponse {
+    MessageBatchJob job = 1;
+}
+
+message ListMessageBatchJobRequest {
+    // @gotags: form:"offset"
+    int32 offset = 1;
+    // @gotags: form:"limit"
+    int32 limit = 2;
+}
+
+message ListMessageBatchJobResponse {
+    int64 total = 1;
+    repeated MessageBatchJob jobs = 2;
+}

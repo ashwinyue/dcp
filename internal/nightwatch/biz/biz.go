@@ -14,6 +14,7 @@ import (
 	cronjobv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/cronjob"
 	documentv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/document"
 	jobv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/job"
+	messagebatchv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/messagebatch"
 	postv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/post"
 	statustrackingv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/statustracking"
 
@@ -36,10 +37,10 @@ type IBiz interface {
 	CronJobV1() cronjobv1.CronJobBiz
 	// JobV1 获取任务业务接口.
 	JobV1() jobv1.JobBiz
+	// MessageBatchV1 获取消息批处理业务接口.
+	MessageBatchV1() messagebatchv1.MessageBatchBiz
 	// PostV1 获取帖子业务接口.
 	PostV1() postv1.PostBiz
-	// Document 获取文档业务接口.
-	Document() documentv1.DocumentBiz
 	// StatusTrackingV1 获取状态跟踪业务接口.
 	StatusTrackingV1() statustrackingv1.StatusTrackingBiz
 	// PostV2 获取帖子业务接口（V2 版本）.
@@ -60,13 +61,6 @@ type IBiz interface {
 	HeartbeatSyncer() syncer.HeartbeatSyncer
 }
 
-// BizOptions defines the options for the biz.
-type BizOptions struct {
-	Store         store.IStore
-	CacheManager  *cache.CacheManager
-	SyncerManager syncer.SyncerManager
-}
-
 // biz is the business layer.
 type biz struct {
 	store         store.IStore
@@ -75,11 +69,11 @@ type biz struct {
 }
 
 // NewBiz creates a new biz instance.
-func NewBiz(opts *BizOptions) *biz {
+func NewBiz(store store.IStore, cacheManager *cache.CacheManager, syncerManager syncer.SyncerManager) *biz {
 	return &biz{
-		store:         opts.Store,
-		cacheManager:  opts.CacheManager,
-		syncerManager: opts.SyncerManager,
+		store:         store,
+		cacheManager:  cacheManager,
+		syncerManager: syncerManager,
 	}
 }
 
@@ -131,6 +125,11 @@ func (b *biz) PostV1() postv1.PostBiz {
 // Document 返回一个实现了 DocumentBiz 接口的实例.
 func (b *biz) Document() documentv1.DocumentBiz {
 	return documentv1.New(b.store)
+}
+
+// MessageBatchV1 返回一个实现了 MessageBatchBiz 接口的实例.
+func (b *biz) MessageBatchV1() messagebatchv1.MessageBatchBiz {
+	return messagebatchv1.New(b.store)
 }
 
 // StatusTrackingV1 返回一个实现了 StatusTrackingBiz 接口的实例.

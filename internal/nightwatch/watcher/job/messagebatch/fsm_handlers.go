@@ -2,11 +2,11 @@ package messagebatch
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/looplab/fsm"
 
+	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
 	jobconditionsutil "github.com/ashwinyue/dcp/internal/pkg/util/jobconditions"
 )
@@ -26,7 +26,7 @@ func (usm *StateMachine) OnPreparationReady(event *fsm.Event) {
 
 	// Mark job condition as ready
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchPreparationReady)
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 
 	// Auto-transition to running
 	go func() {
@@ -42,7 +42,8 @@ func (usm *StateMachine) OnPreparationRunning(event *fsm.Event) {
 	usm.logger.Infow("Preparation phase running", "job_id", usm.job.JobID)
 
 	// Apply rate limiting
-	_ = usm.watcher.Limiter.Processing.Take()
+	// TODO: Implement rate limiting when Limiter is available
+	// _ = usm.watcher.Limiter.Processing.Take()
 
 	// Execute preparation logic asynchronously
 	go func() {
@@ -90,7 +91,7 @@ func (usm *StateMachine) OnPreparationPaused(event *fsm.Event) {
 	}
 
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchPreparationPaused)
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 }
 
 // OnPreparationCompleted handles the preparation completed state
@@ -102,8 +103,7 @@ func (usm *StateMachine) OnPreparationCompleted(event *fsm.Event) {
 		endTime := time.Now()
 		stats.EndTime = &endTime
 		duration := endTime.Sub(stats.StartTime).Seconds()
-		durationInt := int64(duration)
-		stats.Duration = &durationInt
+		stats.Duration = &duration
 	})
 
 	// Save preparation results
@@ -114,7 +114,7 @@ func (usm *StateMachine) OnPreparationCompleted(event *fsm.Event) {
 	}
 
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchPreparationCompleted)
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 
 	// Auto-transition to delivery phase
 	go func() {
@@ -157,11 +157,11 @@ func (usm *StateMachine) OnPreparationFailed(event *fsm.Event) {
 	usm.job.EndedAt = time.Now()
 
 	cond := jobconditionsutil.FalseCondition(known.MessageBatchPreparationFailed, "Preparation failed after max retries")
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 
 	// Transition to final failed state
 	ctx := context.Background()
-	usm.fsm.Event(ctx, known.MessageBatchEventFail)
+	usm.fsm.Event(ctx, known.MessageBatchEventPrepareFail)
 }
 
 // Delivery Phase Handlers
@@ -179,7 +179,7 @@ func (usm *StateMachine) OnDeliveryReady(event *fsm.Event) {
 
 	// Mark job condition as ready
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchDeliveryReady)
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 
 	// Auto-transition to running
 	go func() {
@@ -195,7 +195,8 @@ func (usm *StateMachine) OnDeliveryRunning(event *fsm.Event) {
 	usm.logger.Infow("Delivery phase running", "job_id", usm.job.JobID)
 
 	// Apply rate limiting
-	_ = usm.watcher.Limiter.Processing.Take()
+	// TODO: Implement rate limiting when Limiter is available
+	// _ = usm.watcher.Limiter.Processing.Take()
 
 	// Execute delivery logic asynchronously
 	go func() {
@@ -243,7 +244,7 @@ func (usm *StateMachine) OnDeliveryPaused(event *fsm.Event) {
 	}
 
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchDeliveryPaused)
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 }
 
 // OnDeliveryCompleted handles the delivery completed state
@@ -255,8 +256,7 @@ func (usm *StateMachine) OnDeliveryCompleted(event *fsm.Event) {
 		endTime := time.Now()
 		stats.EndTime = &endTime
 		duration := endTime.Sub(stats.StartTime).Seconds()
-		durationInt := int64(duration)
-		stats.Duration = &durationInt
+		stats.Duration = &duration
 	})
 
 	// Save delivery results
@@ -267,12 +267,12 @@ func (usm *StateMachine) OnDeliveryCompleted(event *fsm.Event) {
 	}
 
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchDeliveryCompleted)
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 
 	// Auto-transition to final success state
 	go func() {
 		time.Sleep(100 * time.Millisecond) // Small delay to ensure state is saved
-		if err := usm.Transition(context.Background(), known.MessageBatchEventComplete); err != nil {
+		if err := usm.Transition(context.Background(), known.MessageBatchEventDeliveryComplete); err != nil {
 			usm.logger.Errorw("Failed to transition to success state", "job_id", usm.job.JobID, "error", err)
 		}
 	}()
@@ -310,11 +310,11 @@ func (usm *StateMachine) OnDeliveryFailed(event *fsm.Event) {
 	usm.job.EndedAt = time.Now()
 
 	cond := jobconditionsutil.FalseCondition(known.MessageBatchDeliveryFailed, "Delivery failed after max retries")
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 
 	// Transition to final failed state
 	ctx := context.Background()
-	usm.fsm.Event(ctx, known.MessageBatchEventFail)
+	usm.fsm.Event(ctx, known.MessageBatchEventDeliveryFail)
 }
 
 // Final State Handlers
@@ -332,7 +332,7 @@ func (usm *StateMachine) OnSucceeded(event *fsm.Event) {
 	// Mark job as completed
 	usm.job.EndedAt = time.Now()
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchSucceeded)
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 }
 
 // OnFailed handles the final failed state
@@ -348,7 +348,7 @@ func (usm *StateMachine) OnFailed(event *fsm.Event) {
 	// Mark job as failed
 	usm.job.EndedAt = time.Now()
 	cond := jobconditionsutil.FalseCondition(known.MessageBatchFailed, "Message batch processing failed")
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 }
 
 // OnCancelled handles the cancelled state
@@ -368,8 +368,8 @@ func (usm *StateMachine) OnCancelled(event *fsm.Event) {
 
 	// Mark job as cancelled
 	usm.job.EndedAt = time.Now()
-	cond := jobconditionsutil.FalseCondition(known.MessageBatchCancelled, "Message batch processing cancelled")
-	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
+	cond := jobconditionsutil.FalseCondition(known.MessageBatchFailed, "Message batch processing cancelled")
+	usm.job.Conditions = (*model.JobConditions)(jobconditionsutil.Set((*model.JobConditions)(usm.job.Conditions), cond))
 }
 
 // Helper methods

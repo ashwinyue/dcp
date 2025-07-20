@@ -60,6 +60,7 @@ message MessageBatchParams {
   repeated string recipients = 8;
   string template = 9;
   string messageType = 10;
+  int64 concurrency = 11;
 }
 
 message JobResults{

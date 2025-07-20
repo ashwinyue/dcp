@@ -9,11 +9,15 @@ import (
 )
 
 var (
-	ErrCronJobStatusInvalidType = errors.New("invalid type for CronJobStatus")
-	ErrJobMInvalidType          = errors.New("invalid type for JobM")
-	ErrJobParamsInvalidType     = errors.New("invalid type for JobParams")
-	ErrJobResultsInvalidType    = errors.New("invalid type for JobResults")
-	ErrJobConditionsInvalidType = errors.New("invalid type for JobConditions")
+	ErrCronJobStatusInvalidType        = errors.New("invalid type for CronJobStatus")
+	ErrJobMInvalidType                 = errors.New("invalid type for JobM")
+	ErrJobParamsInvalidType            = errors.New("invalid type for JobParams")
+	ErrJobResultsInvalidType           = errors.New("invalid type for JobResults")
+	ErrJobConditionsInvalidType        = errors.New("invalid type for JobConditions")
+	ErrMessageBatchJobMInvalidType     = errors.New("invalid type for MessageBatchJobM")
+	ErrMessageBatchJobParamsInvalidType = errors.New("invalid type for MessageBatchJobParams")
+	ErrMessageBatchJobResultsInvalidType = errors.New("invalid type for MessageBatchJobResults")
+	ErrMessageBatchJobConditionsInvalidType = errors.New("invalid type for MessageBatchJobConditions")
 )
 
 const (
@@ -127,5 +131,92 @@ func (job *JobM) Scan(value interface{}) error {
 
 // Value implements the sql Valuer interface
 func (job *JobM) Value() (driver.Value, error) {
+	return json.Marshal(job)
+}
+
+// MessageBatchJob related types
+type MessageBatchJobParams v1.MessageBatchJobParams
+
+// Scan implements the sql Scanner interface
+func (params *MessageBatchJobParams) Scan(value interface{}) error {
+	if value == nil {
+		*params = MessageBatchJobParams{}
+		return nil
+	}
+
+	bytes, ok := value.([]byte)
+	if !ok {
+		return ErrMessageBatchJobParamsInvalidType
+	}
+
+	return json.Unmarshal(bytes, params)
+}
+
+// Value implements the sql Valuer interface
+func (params *MessageBatchJobParams) Value() (driver.Value, error) {
+	return json.Marshal(params)
+}
+
+type MessageBatchJobResults v1.MessageBatchJobResults
+
+// Scan implements the sql Scanner interface
+func (result *MessageBatchJobResults) Scan(value interface{}) error {
+	if value == nil {
+		*result = MessageBatchJobResults{}
+		return nil
+	}
+
+	bytes, ok := value.([]byte)
+	if !ok {
+		return ErrMessageBatchJobResultsInvalidType
+	}
+
+	return json.Unmarshal(bytes, result)
+}
+
+// Value implements the sql Valuer interface
+func (result *MessageBatchJobResults) Value() (driver.Value, error) {
+	return json.Marshal(result)
+}
+
+type MessageBatchJobConditions []*v1.MessageBatchJobCondition
+
+// Scan implements the sql Scanner interface
+func (conds *MessageBatchJobConditions) Scan(value interface{}) error {
+	if value == nil {
+		*conds = MessageBatchJobConditions{}
+		return nil
+	}
+
+	bytes, ok := value.([]byte)
+	if !ok {
+		return ErrMessageBatchJobConditionsInvalidType
+	}
+
+	return json.Unmarshal(bytes, conds)
+}
+
+// Value implements the sql Valuer interface
+func (conds *MessageBatchJobConditions) Value() (driver.Value, error) {
+	return json.Marshal(conds)
+}
+
+// Scan implements the sql Scanner interface
+func (job *MessageBatchJobM) Scan(value interface{}) error {
+	if value == nil {
+		*job = MessageBatchJobM{}
+		return nil
+	}
+
+	bytes, ok := value.([]byte)
+	if !ok {
+		return ErrMessageBatchJobMInvalidType
+	}
+
+	return json.Unmarshal(bytes, job)
+}
+
+// Value implements the sql Valuer interface
+func (job *MessageBatchJobM) Value() (driver.Value, error) {
 	return json.Marshal(job)
 }

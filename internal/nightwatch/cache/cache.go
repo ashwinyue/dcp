@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/wire"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
 	"github.com/redis/go-redis/v9"
 )
+
+// ProviderSet 是一个 Wire 的 Provider 集合，用于声明依赖注入的规则.
+var ProviderSet = wire.NewSet(NewCacheManager)
 
 // RedisClient defines the interface for Redis operations
 type RedisClient interface {

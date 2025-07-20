@@ -38,11 +38,10 @@ type IStore interface {
 
 	CronJob() CronJobStore
 	Job() JobStore
+	MessageBatchJob() MessageBatchJobStore
 	Post() PostStore
 	// ConcretePost ConcretePosts 是一个示例 store 实现，用来演示在 Go 中如何直接与 DB 交互.
 	ConcretePost() ConcretePostStore
-	// Document 返回一个实现了 DocumentStore 接口的实例 (MongoDB).
-	Document() DocumentStore
 }
 
 // transactionKey 用于在 context.Context 中存储事务上下文的键.
@@ -130,6 +129,11 @@ func (store *datastore) Post() PostStore {
 // ConcretePost 返回一个实现了 ConcretePostStore 接口的实例.
 func (store *datastore) ConcretePost() ConcretePostStore {
 	return newConcretePostStore(store)
+}
+
+// MessageBatchJob 返回一个实现了 MessageBatchJobStore 接口的实例.
+func (store *datastore) MessageBatchJob() MessageBatchJobStore {
+	return newMessageBatchJobStore(store)
 }
 
 // Document 返回一个实现了 DocumentStore 接口的实例.

@@ -43,10 +43,10 @@ type PhaseStatistics struct {
 	Processed  int64      `json:"processed"`
 	Success    int64      `json:"success"`
 	Failed     int64      `json:"failed"`
-	Percent    float32    `json:"percent"`
+	Percent    float64    `json:"percent"`
 	StartTime  time.Time  `json:"start_time"`
 	EndTime    *time.Time `json:"end_time,omitempty"`
-	Duration   *int64     `json:"duration_seconds,omitempty"`
+	Duration   *float64   `json:"duration_seconds,omitempty"`
 	RetryCount int        `json:"retry_count"`
 	Partitions int        `json:"partitions"`
 }

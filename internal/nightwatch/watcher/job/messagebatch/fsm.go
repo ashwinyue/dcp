@@ -9,6 +9,7 @@ import (
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
+	v1 "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1"
 )
 
 // State constants
@@ -54,7 +55,6 @@ const (
 	DeliveryStart    = "DELIVERY_START"
 	DeliveryBegin    = "DELIVERY_BEGIN"
 	DeliveryPause    = "DELIVERY_PAUSE"
-	DeliveryPaused   = "DELIVERY_PAUSED"
 	DeliveryResume   = "DELIVERY_RESUME"
 	DeliveryComplete = "DELIVERY_COMPLETE"
 	DeliveryFail     = "DELIVERY_FAIL"
@@ -79,7 +79,8 @@ type StateMachine struct {
 }
 
 // NewStateMachine creates a new state machine
-func NewStateMachine(initial string, watcher *Watcher, job *model.JobM) *StateMachine {
+func NewStateMachine(watcher *Watcher, job *model.JobM) *StateMachine {
+	initial := Pending
 	usm := &StateMachine{
 		watcher: watcher,
 		job:     job,
@@ -128,30 +129,7 @@ func NewStateMachine(initial string, watcher *Watcher, job *model.JobM) *StateMa
 			{Name: Fail, Src: []string{PreparationFailed, DeliveryFailed}, Dst: Failed},
 			{Name: Cancel, Src: []string{"*"}, Dst: Cancelled},
 		},
-		fsm.Callbacks{
-			"enter_state": usm.EnterState,
-
-			// Preparation phase callbacks
-			"enter_" + PreparationReady:     usm.OnPreparationReady,
-			"enter_" + PreparationRunning:   usm.OnPreparationRunning,
-			"enter_" + PreparationPausing:   usm.OnPreparationPausing,
-			"enter_" + PreparationPaused:    usm.OnPreparationPaused,
-			"enter_" + PreparationCompleted: usm.OnPreparationCompleted,
-			"enter_" + PreparationFailed:    usm.OnPreparationFailed,
-
-			// Delivery phase callbacks
-			"enter_" + DeliveryReady:     usm.OnDeliveryReady,
-			"enter_" + DeliveryRunning:   usm.OnDeliveryRunning,
-			"enter_" + DeliveryPausing:   usm.OnDeliveryPausing,
-			"enter_" + DeliveryPaused:    usm.OnDeliveryPaused,
-			"enter_" + DeliveryCompleted: usm.OnDeliveryCompleted,
-			"enter_" + DeliveryFailed:    usm.OnDeliveryFailed,
-
-			// Final state callbacks
-			"enter_" + Succeeded: usm.OnSucceeded,
-			"enter_" + Failed:    usm.OnFailed,
-			"enter_" + Cancelled: usm.OnCancelled,
-		},
+		fsm.Callbacks{},
 	)
 
 	return usm
@@ -226,7 +204,7 @@ func (usm *StateMachine) EnterState(event *fsm.Event) {
 
 	// Update job in store
 	ctx := context.Background()
-	if err := usm.watcher.store.Job().Update(ctx, usm.job); err != nil {
+	if err := usm.watcher.store.Update(ctx, usm.job); err != nil {
 		usm.logger.Errorw("Failed to update job", "job_id", usm.job.JobID, "error", err)
 	}
 }
@@ -258,11 +236,13 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 	if usm.job.Results == nil {
 		usm.job.Results = &model.JobResults{}
 	}
-	if usm.job.Results.MessageBatch == nil {
-		usm.job.Results.MessageBatch = &v1.MessageBatchResults{}
-	}
 
-	results := usm.job.Results.MessageBatch
+	results := (*v1.JobResults)(usm.job.Results)
+
+	// Initialize MessageBatch if needed
+	if results.MessageBatch == nil {
+		results.MessageBatch = &v1.MessageBatchResults{}
+	}
 
 	// Save preparation statistics
 	if prepStats := usm.GetStatistics("PREPARATION"); prepStats != nil {
@@ -270,12 +250,13 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 		retryCount := int64(prepStats.RetryCount)
 		partitions := int64(prepStats.Partitions)
 
-		results.PreparationStats = &v1.MessageBatchPhaseStats{
+		percent := float32(prepStats.Percent)
+		results.MessageBatch.PreparationStats = &v1.MessageBatchPhaseStats{
 			Total:      &prepStats.Total,
 			Processed:  &prepStats.Processed,
 			Success:    &prepStats.Success,
 			Failed:     &prepStats.Failed,
-			Percent:    &prepStats.Percent,
+			Percent:    &percent,
 			StartTime:  &startTime,
 			RetryCount: &retryCount,
 			Partitions: &partitions,
@@ -283,11 +264,12 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 
 		if prepStats.EndTime != nil {
 			endTime := prepStats.EndTime.Unix()
-			results.PreparationStats.EndTime = &endTime
+			results.MessageBatch.PreparationStats.EndTime = &endTime
 		}
 		if prepStats.Duration != nil {
-			results.PreparationStats.DurationSeconds = prepStats.Duration
-		}
+            durationSeconds := int64(*prepStats.Duration)
+            results.MessageBatch.PreparationStats.DurationSeconds = &durationSeconds
+        }
 	}
 
 	// Save delivery statistics
@@ -296,12 +278,13 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 		retryCount := int64(deliveryStats.RetryCount)
 		partitions := int64(deliveryStats.Partitions)
 
-		results.DeliveryStats = &v1.MessageBatchPhaseStats{
+		deliveryPercent := float32(deliveryStats.Percent)
+		results.MessageBatch.DeliveryStats = &v1.MessageBatchPhaseStats{
 			Total:      &deliveryStats.Total,
 			Processed:  &deliveryStats.Processed,
 			Success:    &deliveryStats.Success,
 			Failed:     &deliveryStats.Failed,
-			Percent:    &deliveryStats.Percent,
+			Percent:    &deliveryPercent,
 			StartTime:  &startTime,
 			RetryCount: &retryCount,
 			Partitions: &partitions,
@@ -309,11 +292,12 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 
 		if deliveryStats.EndTime != nil {
 			endTime := deliveryStats.EndTime.Unix()
-			results.DeliveryStats.EndTime = &endTime
+			results.MessageBatch.DeliveryStats.EndTime = &endTime
 		}
 		if deliveryStats.Duration != nil {
-			results.DeliveryStats.DurationSeconds = deliveryStats.Duration
-		}
+            deliveryDurationSeconds := int64(*deliveryStats.Duration)
+            results.MessageBatch.DeliveryStats.DurationSeconds = &deliveryDurationSeconds
+        }
 	}
 
 	// Update overall batch status
@@ -321,9 +305,9 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 	currentState := usm.job.Status
 	batchRetryCount := int64(usm.retryCount)
 
-	results.CurrentPhase = &currentPhase
-	results.CurrentState = &currentState
-	results.RetryCount = &batchRetryCount
+	results.MessageBatch.CurrentPhase = &currentPhase
+	results.MessageBatch.CurrentState = &currentState
+	results.MessageBatch.RetryCount = &batchRetryCount
 
 	return nil
 }
@@ -332,20 +316,20 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 func (usm *StateMachine) getCurrentPhase() string {
 	state := usm.GetCurrentState()
 	switch {
-	case state == known.MessageBatchPending ||
-		state == known.MessageBatchPreparationReady ||
-		state == known.MessageBatchPreparationRunning ||
-		state == known.MessageBatchPreparationPausing ||
-		state == known.MessageBatchPreparationPaused ||
-		state == known.MessageBatchPreparationCompleted ||
-		state == known.MessageBatchPreparationFailed:
+	case state == Pending ||
+		state == PreparationReady ||
+		state == PreparationRunning ||
+		state == PreparationPausing ||
+		state == PreparationPaused ||
+		state == PreparationCompleted ||
+		state == PreparationFailed:
 		return "PREPARATION"
-	case state == known.MessageBatchDeliveryReady ||
-		state == known.MessageBatchDeliveryRunning ||
-		state == known.MessageBatchDeliveryPausing ||
-		state == known.MessageBatchDeliveryPaused ||
-		state == known.MessageBatchDeliveryCompleted ||
-		state == known.MessageBatchDeliveryFailed:
+	case state == DeliveryReady ||
+		state == DeliveryRunning ||
+		state == DeliveryPausing ||
+		state == DeliveryPaused ||
+		state == DeliveryCompleted ||
+		state == DeliveryFailed:
 		return "DELIVERY"
 	default:
 		return "UNKNOWN"

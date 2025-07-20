@@ -8,10 +8,15 @@ package nightwatch
 
 import (
 	"github.com/ashwinyue/dcp/internal/nightwatch/biz"
+	"github.com/ashwinyue/dcp/internal/nightwatch/cache"
 	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/validation"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
+	"github.com/ashwinyue/dcp/internal/nightwatch/syncer"
+	"github.com/ashwinyue/dcp/internal/pkg/log"
 	"github.com/ashwinyue/dcp/internal/pkg/server"
+)
 
+import (
 	_ "github.com/ashwinyue/dcp/internal/nightwatch/watcher/all"
 )
 
@@ -24,7 +29,14 @@ func InitializeWebServer(config *Config) (server.Server, error) {
 		return nil, err
 	}
 	datastore := store.NewStore(db)
-	bizBiz := biz.NewBiz(datastore)
+	cacheOptions := ProvideCacheOptions(config)
+	logger := ProvideLogger()
+	cacheManager, err := cache.NewCacheManager(cacheOptions, logger)
+	if err != nil {
+		return nil, err
+	}
+	syncerManager := syncer.NewSyncerManager()
+	bizBiz := biz.NewBiz(datastore, cacheManager, syncerManager)
 	validator := validation.New(datastore)
 	serverConfig := &ServerConfig{
 		cfg: config,
@@ -36,4 +48,29 @@ func InitializeWebServer(config *Config) (server.Server, error) {
 		return nil, err
 	}
 	return serverServer, nil
+}
+
+// wire.go:
+
+// ProvideCacheOptions 提供缓存配置给 Wire
+func ProvideCacheOptions(cfg *Config) *cache.CacheOptions {
+	if cfg.RedisOptions == nil {
+
+		return &cache.CacheOptions{
+			Addr:   "localhost:6379",
+			DB:     0,
+			Prefix: "nightwatch:",
+		}
+	}
+	return &cache.CacheOptions{
+		Addr:     cfg.RedisOptions.Addr,
+		Password: cfg.RedisOptions.Password,
+		DB:       cfg.RedisOptions.Database,
+		Prefix:   "nightwatch:",
+	}
+}
+
+// ProvideLogger 提供日志实例给 Wire
+func ProvideLogger() log.Logger {
+	return log.New(nil)
 }
