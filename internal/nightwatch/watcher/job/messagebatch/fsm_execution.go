@@ -16,7 +16,7 @@ import (
 // Preparation Phase Execution
 
 // initializePreparation initializes the preparation phase
-func (usm *UnifiedStateMachine) initializePreparation(ctx context.Context) error {
+func (usm *StateMachine) initializePreparation(ctx context.Context) error {
 	usm.logger.Infow("Initializing preparation phase", "job_id", usm.job.JobID)
 
 	// Initialize job results if needed
@@ -49,7 +49,7 @@ func (usm *UnifiedStateMachine) initializePreparation(ctx context.Context) error
 }
 
 // executePreparation executes the main preparation logic
-func (usm *UnifiedStateMachine) executePreparation(ctx context.Context) error {
+func (usm *StateMachine) executePreparation(ctx context.Context) error {
 	usm.logger.Infow("Executing preparation phase", "job_id", usm.job.JobID)
 
 	prepStats := usm.GetStatistics("PREPARATION")
@@ -145,7 +145,7 @@ func (usm *UnifiedStateMachine) executePreparation(ctx context.Context) error {
 }
 
 // isPreparationComplete checks if preparation is complete
-func (usm *UnifiedStateMachine) isPreparationComplete(ctx context.Context) bool {
+func (usm *StateMachine) isPreparationComplete(ctx context.Context) bool {
 	prepStats := usm.GetStatistics("PREPARATION")
 	if prepStats == nil {
 		return false
@@ -154,7 +154,7 @@ func (usm *UnifiedStateMachine) isPreparationComplete(ctx context.Context) bool 
 }
 
 // savePreparationResults saves preparation results
-func (usm *UnifiedStateMachine) savePreparationResults(ctx context.Context) error {
+func (usm *StateMachine) savePreparationResults(ctx context.Context) error {
 	usm.logger.Infow("Saving preparation results", "job_id", usm.job.JobID)
 
 	// Create batch in the business service
@@ -170,7 +170,7 @@ func (usm *UnifiedStateMachine) savePreparationResults(ctx context.Context) erro
 // Delivery Phase Execution
 
 // initializeDelivery initializes the delivery phase
-func (usm *UnifiedStateMachine) initializeDelivery(ctx context.Context) error {
+func (usm *StateMachine) initializeDelivery(ctx context.Context) error {
 	usm.logger.Infow("Initializing delivery phase", "job_id", usm.job.JobID)
 
 	// Get preparation results to determine delivery total
@@ -196,7 +196,7 @@ func (usm *UnifiedStateMachine) initializeDelivery(ctx context.Context) error {
 }
 
 // executeDelivery executes the main delivery logic
-func (usm *UnifiedStateMachine) executeDelivery(ctx context.Context) error {
+func (usm *StateMachine) executeDelivery(ctx context.Context) error {
 	usm.logger.Infow("Executing delivery phase", "job_id", usm.job.JobID)
 
 	deliveryStats := usm.GetStatistics("DELIVERY")
@@ -323,7 +323,7 @@ func (usm *UnifiedStateMachine) executeDelivery(ctx context.Context) error {
 }
 
 // processDeliveryPartition processes a single delivery partition
-func (usm *UnifiedStateMachine) processDeliveryPartition(ctx context.Context, partitionID int, task *PartitionTask) error {
+func (usm *StateMachine) processDeliveryPartition(ctx context.Context, partitionID int, task *PartitionTask) error {
 	usm.logger.Infow("Processing delivery partition",
 		"job_id", usm.job.JobID,
 		"partition_id", partitionID,
@@ -386,7 +386,7 @@ func (usm *UnifiedStateMachine) processDeliveryPartition(ctx context.Context, pa
 }
 
 // isDeliveryComplete checks if delivery is complete
-func (usm *UnifiedStateMachine) isDeliveryComplete(ctx context.Context) bool {
+func (usm *StateMachine) isDeliveryComplete(ctx context.Context) bool {
 	deliveryStats := usm.GetStatistics("DELIVERY")
 	if deliveryStats == nil {
 		return false
@@ -395,7 +395,7 @@ func (usm *UnifiedStateMachine) isDeliveryComplete(ctx context.Context) bool {
 }
 
 // saveDeliveryResults saves delivery results
-func (usm *UnifiedStateMachine) saveDeliveryResults(ctx context.Context) error {
+func (usm *StateMachine) saveDeliveryResults(ctx context.Context) error {
 	usm.logger.Infow("Saving delivery results", "job_id", usm.job.JobID)
 
 	// Save statistics

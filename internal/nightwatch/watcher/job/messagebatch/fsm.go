@@ -2,7 +2,6 @@ package messagebatch
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -16,8 +15,8 @@ import (
 	v1 "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1"
 )
 
-// UnifiedStateMachine represents the unified state machine for SMS batch processing
-type UnifiedStateMachine struct {
+// StateMachine represents the state machine for SMS batch processing
+type StateMachine struct {
 	watcher    *Watcher
 	job        *model.JobM
 	fsm        *fsm.FSM
@@ -28,9 +27,9 @@ type UnifiedStateMachine struct {
 	logger     log.Logger
 }
 
-// NewUnifiedStateMachine creates a new unified state machine
-func NewUnifiedStateMachine(initial string, watcher *Watcher, job *model.JobM) *UnifiedStateMachine {
-	usm := &UnifiedStateMachine{
+// NewStateMachine creates a new state machine
+func NewStateMachine(initial string, watcher *Watcher, job *model.JobM) *StateMachine {
+	usm := &StateMachine{
 		watcher: watcher,
 		job:     job,
 		statistics: map[string]*PhaseStatistics{
@@ -98,9 +97,9 @@ func NewUnifiedStateMachine(initial string, watcher *Watcher, job *model.JobM) *
 			"enter_" + known.MessageBatchDeliveryFailed:    fsmutil.WrapEvent(usm.OnDeliveryFailed),
 
 			// Final state callbacks
-			"enter_" + known.MessageBatchSucceeded:  fsmutil.WrapEvent(usm.OnSucceeded),
-			"enter_" + known.MessageBatchFailed:     fsmutil.WrapEvent(usm.OnFailed),
-			"enter_" + known.MessageBatchCancelled:  fsmutil.WrapEvent(usm.OnCancelled),
+			"enter_" + known.MessageBatchSucceeded: fsmutil.WrapEvent(usm.OnSucceeded),
+			"enter_" + known.MessageBatchFailed:    fsmutil.WrapEvent(usm.OnFailed),
+			"enter_" + known.MessageBatchCancelled: fsmutil.WrapEvent(usm.OnCancelled),
 		},
 	)
 
@@ -108,31 +107,31 @@ func NewUnifiedStateMachine(initial string, watcher *Watcher, job *model.JobM) *
 }
 
 // StateManager interface implementation
-func (usm *UnifiedStateMachine) GetCurrentState() string {
+func (usm *StateMachine) GetCurrentState() string {
 	return usm.fsm.Current()
 }
 
-func (usm *UnifiedStateMachine) CanTransition(event string) bool {
+func (usm *StateMachine) CanTransition(event string) bool {
 	return usm.fsm.Can(event)
 }
 
-func (usm *UnifiedStateMachine) Transition(ctx context.Context, event string) error {
+func (usm *StateMachine) Transition(ctx context.Context, event string) error {
 	return usm.fsm.Event(ctx, event)
 }
 
-func (usm *UnifiedStateMachine) GetValidEvents() []string {
+func (usm *StateMachine) GetValidEvents() []string {
 	return usm.fsm.AvailableTransitions()
 }
 
 // GetStatistics returns statistics for a specific phase
-func (usm *UnifiedStateMachine) GetStatistics(phase string) *PhaseStatistics {
+func (usm *StateMachine) GetStatistics(phase string) *PhaseStatistics {
 	usm.mu.RLock()
 	defer usm.mu.RUnlock()
 	return usm.statistics[phase]
 }
 
 // GetAllStatistics returns all phase statistics
-func (usm *UnifiedStateMachine) GetAllStatistics() map[string]*PhaseStatistics {
+func (usm *StateMachine) GetAllStatistics() map[string]*PhaseStatistics {
 	usm.mu.RLock()
 	defer usm.mu.RUnlock()
 	stats := make(map[string]*PhaseStatistics)
@@ -143,7 +142,7 @@ func (usm *UnifiedStateMachine) GetAllStatistics() map[string]*PhaseStatistics {
 }
 
 // EnterState handles state transitions and updates job status
-func (usm *UnifiedStateMachine) EnterState(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) EnterState(ctx context.Context, event *fsm.Event) error {
 	currentState := event.FSM.Current()
 
 	usm.logger.Infow("Unified FSM state transition",
@@ -185,13 +184,13 @@ func (usm *UnifiedStateMachine) EnterState(ctx context.Context, event *fsm.Event
 }
 
 // isTimeout checks if the batch processing has timed out
-func (usm *UnifiedStateMachine) isTimeout() bool {
+func (usm *StateMachine) isTimeout() bool {
 	timeout := time.Duration(known.MessageBatchPreparationTimeout+known.MessageBatchDeliveryTimeout) * time.Second
 	return time.Since(usm.startTime) > timeout
 }
 
 // updateStatistics updates statistics for a specific phase
-func (usm *UnifiedStateMachine) updateStatistics(phase string, updater func(*PhaseStatistics)) {
+func (usm *StateMachine) updateStatistics(phase string, updater func(*PhaseStatistics)) {
 	usm.mu.Lock()
 	defer usm.mu.Unlock()
 	if stats, exists := usm.statistics[phase]; exists {
@@ -200,7 +199,7 @@ func (usm *UnifiedStateMachine) updateStatistics(phase string, updater func(*Pha
 }
 
 // saveStatistics saves current statistics to job results
-func (usm *UnifiedStateMachine) saveStatistics(ctx context.Context) error {
+func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 	// Initialize job results if needed
 	if usm.job.Results == nil {
 		usm.job.Results = &model.JobResults{}
@@ -276,7 +275,7 @@ func (usm *UnifiedStateMachine) saveStatistics(ctx context.Context) error {
 }
 
 // getCurrentPhase determines the current phase based on state
-func (usm *UnifiedStateMachine) getCurrentPhase() string {
+func (usm *StateMachine) getCurrentPhase() string {
 	state := usm.GetCurrentState()
 	switch {
 	case state == known.MessageBatchPending ||

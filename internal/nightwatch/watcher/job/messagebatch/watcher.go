@@ -3,237 +3,236 @@ package messagebatch
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
-	"github.com/gammazero/workerpool"
-	"github.com/onexstack/onexstack/pkg/store/where"
-	"github.com/onexstack/onexstack/pkg/watch/registry"
-	"go.uber.org/ratelimit"
-
 	"github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/messagebatch"
-	"github.com/ashwinyue/dcp/internal/nightwatch/store"
-	"github.com/ashwinyue/dcp/internal/nightwatch/watcher"
-	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
-	"github.com/ashwinyue/dcp/internal/pkg/log"
-	"github.com/ashwinyue/dcp/internal/pkg/model"
+	"github.com/ashwinyue/dcp/internal/nightwatch/model"
+	v1 "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1"
+	"golang.org/x/time/rate"
 )
 
-// Ensure Watcher implements the registry.Watcher interface.
-var _ registry.Watcher = (*Watcher)(nil)
-
-// Limiter holds rate limiters for different operations.
-type Limiter struct {
-	Processing ratelimit.Limiter
-	Messaging  ratelimit.Limiter
-}
-
-// Watcher monitors and processes message batch jobs.
+// Watcher 消息批处理监控器
 type Watcher struct {
-	// Business service layer
-	MessageBatchService *messagebatch.MessageBatchService
-
-	// Data access
-	Store store.IStore
-
-	// Configuration
-	MaxWorkers int64
-	Limiter    Limiter
-
-	// Logger
-	logger log.Logger
+	service       *messagebatch.MessageBatchService
+	store         model.MessageBatchJobStore
+	workerCount   int
+	rateLimiter   *rate.Limiter
+	ctx           context.Context
+	cancel        context.CancelFunc
+	stateMachines map[string]*StateMachine
+	mu            sync.RWMutex
 }
 
-// Run executes the watcher logic to process message batch jobs.
-func (w *Watcher) Run() {
-	// Define the phases that the watcher can handle for message batch jobs.
-	runablePhase := []string{
-		known.MessageBatchPending,
-		known.MessageBatchProcessing,
-		known.MessageBatchPartialComplete,
-		known.MessageBatchRetrying,
+// NewWatcher 创建新的监控器
+func NewWatcher(
+	service *messagebatch.MessageBatchService,
+	store model.MessageBatchJobStore,
+	workerCount int,
+	rateLimit rate.Limit,
+) *UnifiedWatcher {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Watcher{
+		service:       service,
+		store:         store,
+		workerCount:   workerCount,
+		rateLimiter:   rate.NewLimiter(rateLimit, int(rateLimit)),
+		ctx:           ctx,
+		cancel:        cancel,
+		stateMachines: make(map[string]*UnifiedStateMachine),
+	}
+}
+
+// Run 启动监控器
+func (w *Watcher) Run() error {
+	workerPool := make(chan struct{}, w.workerCount)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return w.ctx.Err()
+		case <-ticker.C:
+			if err := w.processJobs(workerPool); err != nil {
+				fmt.Printf("Error processing jobs: %v\n", err)
+			}
+		}
+	}
+}
+
+// Stop 停止监控器
+func (w *Watcher) Stop() {
+	w.cancel()
+	// 停止所有状态机
+	w.mu.Lock()
+	for _, fsm := range w.stateMachines {
+		fsm.Stop()
+	}
+	w.stateMachines = make(map[string]*UnifiedStateMachine)
+	w.mu.Unlock()
+}
+
+// processJobs 处理任务
+func (w *Watcher) processJobs(workerPool chan struct{}) error {
+	// 查询可运行的任务
+	jobs, err := w.store.FindRunnableJobs(w.ctx, []v1.MessageBatchJobStatus{
+		v1.MessageBatchJobStatus_PENDING,
+		v1.MessageBatchJobStatus_PROCESSING,
+		v1.MessageBatchJobStatus_PARTIAL_COMPLETE,
+		v1.MessageBatchJobStatus_RETRYING,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to find runnable jobs: %w", err)
 	}
 
-	_, jobs, err := w.Store.Job().List(context.Background(), where.F(
-		"scope", known.MessageBatchJobScope,
-		"watcher", known.MessageBatchWatcher,
-		"status", runablePhase,
-		"suspend", known.JobNonSuspended,
-	))
-	if err != nil {
-		w.logger.Errorw("Failed to get runnable message batch jobs", "error", err)
+	// 并发处理任务
+	var wg sync.WaitGroup
+	for _, job := range jobs {
+		select {
+		case workerPool <- struct{}{}:
+			wg.Add(1)
+			go func(job *model.MessageBatchJob) {
+				defer func() {
+					<-workerPool
+					wg.Done()
+				}()
+				w.processJob(job)
+			}(job)
+		case <-w.ctx.Done():
+			return w.ctx.Err()
+		}
+	}
+
+	wg.Wait()
+	return nil
+}
+
+// processJob 处理单个任务
+func (w *Watcher) processJob(job *model.MessageBatchJob) {
+	// 速率限制
+	if err := w.rateLimiter.Wait(w.ctx); err != nil {
 		return
 	}
 
-	wp := workerpool.New(int(w.MaxWorkers))
-	for _, job := range jobs {
-		ctx := context.Background()
-		w.logger.Infow("Processing message batch job",
-			"jobID", job.JobID,
-			"status", job.Status,
-			"scope", job.Scope)
-
-		wp.Submit(func() {
-			if err := w.processMessageBatchJob(ctx, job); err != nil {
-				w.logger.Errorw("Failed to process message batch job",
-					"error", err,
-					"jobID", job.JobID)
-			}
-		})
+	// 获取或创建状态机
+	fsm := w.getOrCreateStateMachine(job)
+	if fsm == nil {
+		return
 	}
 
-	wp.StopWait()
-}
-
-// processMessageBatchJob 处理单个消息批次任务
-func (w *Watcher) processMessageBatchJob(ctx context.Context, job *model.JobM) error {
-	w.Limiter.Processing.Take() // Rate limiting
-
-	// 从job中提取批次信息
-	batchID := job.JobID
-	partitionID := extractPartitionID(job)
-
-	w.logger.Infow("Starting message batch job processing",
-		"batchID", batchID,
-		"partitionID", partitionID,
-		"status", job.Status)
-
+	// 根据当前状态处理任务
 	switch job.Status {
-	case known.MessageBatchPending:
-		return w.handlePendingBatch(ctx, batchID, partitionID, job)
-	case known.MessageBatchProcessing:
-		return w.handleProcessingBatch(ctx, batchID, partitionID, job)
-	case known.MessageBatchPartialComplete:
-		return w.handlePartialCompleteBatch(ctx, batchID, partitionID, job)
-	case known.MessageBatchRetrying:
-		return w.handleRetryingBatch(ctx, batchID, partitionID, job)
+	case v1.MessageBatchJobStatus_PENDING:
+		w.handlePendingJob(fsm, job)
+	case v1.MessageBatchJobStatus_PROCESSING:
+		w.handleProcessingJob(fsm, job)
+	case v1.MessageBatchJobStatus_PARTIAL_COMPLETE:
+		w.handlePartialCompleteJob(fsm, job)
+	case v1.MessageBatchJobStatus_RETRYING:
+		w.handleRetryingJob(fsm, job)
 	default:
-		w.logger.Warnw("Unknown message batch job status", "status", job.Status, "jobID", job.JobID)
-		return nil
+		fmt.Printf("Unknown job status: %v for job %s\n", job.Status, job.ID)
 	}
 }
 
-// handlePendingBatch 处理待处理的批次
-func (w *Watcher) handlePendingBatch(ctx context.Context, batchID string, partitionID int, job *model.JobM) error {
-	w.logger.Infow("Handling pending batch", "batchID", batchID, "partitionID", partitionID)
+// getOrCreateStateMachine 获取或创建状态机
+func (w *Watcher) getOrCreateStateMachine(job *model.MessageBatchJob) *StateMachine {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-	// 1. 创建批次
-	if err := w.MessageBatchService.CreateBatch(ctx, batchID, partitionID); err != nil {
-		w.logger.Errorw("Failed to create batch", "error", err, "batchID", batchID)
-		return w.updateJobStatus(ctx, job, known.MessageBatchFailed, err.Error())
+	if fsm, exists := w.stateMachines[job.ID]; exists {
+		return fsm
 	}
 
-	// 2. 更新任务状态为处理中
-	return w.updateJobStatus(ctx, job, known.MessageBatchProcessing, "Batch created and ready for processing")
+	// 创建新的状态机
+	fsm := NewStateMachine(w.ctx, job, w.service, w.store)
+	w.stateMachines[job.ID] = fsm
+	return fsm
 }
 
-// handleProcessingBatch 处理正在处理的批次
-func (w *Watcher) handleProcessingBatch(ctx context.Context, batchID string, partitionID int, job *model.JobM) error {
-	w.logger.Infow("Handling processing batch", "batchID", batchID, "partitionID", partitionID)
+// removeStateMachine 移除状态机
+func (w *Watcher) removeStateMachine(jobID string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.stateMachines, jobID)
+}
 
-	// 模拟消息数据（在实际应用中，这些数据可能来自外部系统或配置）
-	messages := w.generateSampleMessages(batchID, 10)
-
-	// 处理批次
-	if err := w.MessageBatchService.ProcessBatch(ctx, batchID, partitionID, messages); err != nil {
-		w.logger.Errorw("Failed to process batch", "error", err, "batchID", batchID)
-		return w.updateJobStatus(ctx, job, known.MessageBatchFailed, err.Error())
+// handlePendingJob 处理待处理任务
+func (w *Watcher) handlePendingJob(fsm *StateMachine, job *model.MessageBatchJob) {
+	// 更新任务状态为处理中
+	job.Status = v1.MessageBatchJobStatus_PROCESSING
+	job.StartedAt = time.Now()
+	if err := w.store.UpdateJob(w.ctx, job); err != nil {
+		fmt.Printf("Failed to update job status: %v\n", err)
+		return
 	}
 
-	// 更新任务状态为完成
-	return w.updateJobStatus(ctx, job, known.MessageBatchCompleted, "Batch processing completed successfully")
-}
-
-// handlePartialCompleteBatch 处理部分完成的批次
-func (w *Watcher) handlePartialCompleteBatch(ctx context.Context, batchID string, partitionID int, job *model.JobM) error {
-	w.logger.Infow("Handling partial complete batch", "batchID", batchID, "partitionID", partitionID)
-
-	// 获取批次状态，检查是否需要重试
-	batchDoc, err := w.MessageBatchService.GetBatchStatus(ctx, batchID)
-	if err != nil {
-		w.logger.Errorw("Failed to get batch status", "error", err, "batchID", batchID)
-		return w.updateJobStatus(ctx, job, known.MessageBatchFailed, err.Error())
+	// 触发准备开始事件
+	if err := fsm.TriggerEvent(PrepareStart); err != nil {
+		fmt.Printf("Failed to trigger PrepareStart event: %v\n", err)
 	}
+}
 
-	// 判断是否需要重试
-	if batchDoc.MessageCount > 0 && len(batchDoc.Messages) < int(batchDoc.MessageCount) {
-		return w.updateJobStatus(ctx, job, known.MessageBatchRetrying, "Retrying incomplete messages")
+// handleProcessingJob 处理处理中任务
+func (w *Watcher) handleProcessingJob(fsm *StateMachine, job *model.MessageBatchJob) {
+	// 检查当前状态并继续处理
+	currentState := fsm.GetCurrentState()
+	switch currentState {
+	case PreparationReady:
+		if err := fsm.TriggerEvent(PrepareBegin); err != nil {
+			fmt.Printf("Failed to trigger PrepareBegin event: %v\n", err)
+		}
+	case DeliveryReady:
+		if err := fsm.TriggerEvent(DeliveryBegin); err != nil {
+			fmt.Printf("Failed to trigger DeliveryBegin event: %v\n", err)
+		}
+	case Succeeded, Failed, Cancelled:
+		// 任务已完成，移除状态机
+		w.removeStateMachine(job.ID)
 	}
-
-	// 标记为完成
-	return w.updateJobStatus(ctx, job, known.MessageBatchCompleted, "All messages processed successfully")
 }
 
-// handleRetryingBatch 处理重试中的批次
-func (w *Watcher) handleRetryingBatch(ctx context.Context, batchID string, partitionID int, job *model.JobM) error {
-	w.logger.Infow("Handling retrying batch", "batchID", batchID, "partitionID", partitionID)
-
-	// 重新处理批次（这里可以实现更复杂的重试逻辑）
-	return w.handleProcessingBatch(ctx, batchID, partitionID, job)
-}
-
-// updateJobStatus 更新任务状态
-func (w *Watcher) updateJobStatus(ctx context.Context, job *model.JobM, status, message string) error {
-	job.Status = status
-	job.Message = message
-
-	return w.Store.Job().Update(ctx, job)
-}
-
-// extractPartitionID 从job中提取分区ID
-func extractPartitionID(job *model.JobM) int {
-	// 这里可以从job的metadata或其他字段中提取分区ID
-	// 暂时返回一个固定值
-	return 0
-}
-
-// generateSampleMessages 生成示例消息
-func (w *Watcher) generateSampleMessages(batchID string, count int) []messagebatch.MessageItem {
-	messages := make([]messagebatch.MessageItem, count)
-	for i := 0; i < count; i++ {
-		messages[i] = messagebatch.MessageItem{
-			MessageID: fmt.Sprintf("%s_msg_%d", batchID, i),
-			Content: map[string]interface{}{
-				"index":   i,
-				"batchID": batchID,
-				"data":    fmt.Sprintf("Sample message %d", i),
-			},
-			Timestamp: time.Now(),
-			Status:    "pending",
+// handlePartialCompleteJob 处理部分完成任务
+func (w *Watcher) handlePartialCompleteJob(fsm *StateMachine, job *model.MessageBatchJob) {
+	// 检查是否可以继续处理
+	currentState := fsm.GetCurrentState()
+	if currentState == DeliveryReady {
+		if err := fsm.TriggerEvent(DeliveryBegin); err != nil {
+			fmt.Printf("Failed to trigger DeliveryBegin event: %v\n", err)
 		}
 	}
-	return messages
 }
 
-// Spec returns the cron job specification for scheduling.
-func (w *Watcher) Spec() string {
-	return "@every 3s" // Run every 3 seconds
-}
-
-// SetAggregateConfig configures the watcher with the provided aggregate configuration.
-func (w *Watcher) SetAggregateConfig(config *watcher.AggregateConfig) {
-	// Initialize the business service with all required dependencies
-	w.MessageBatchService = messagebatch.NewMessageBatchService(
-		config.Cache,
-		config.Messaging,
-		config.Store,
-		log.New(nil), // Use default logger
-	)
-
-	w.Store = config.Store
-	w.logger = log.New(nil)
-
-	// Initialize rate limiters
-	w.Limiter = Limiter{
-		Processing: ratelimit.New(known.MessageBatchProcessingQPS),
-		Messaging:  ratelimit.New(known.MessageBatchMessagingQPS),
+// handleRetryingJob 处理重试任务
+func (w *Watcher) handleRetryingJob(fsm *StateMachine, job *model.MessageBatchJob) {
+	// 检查重试条件
+	currentState := fsm.GetCurrentState()
+	switch currentState {
+	case PreparationFailed:
+		if err := fsm.TriggerEvent(PrepareRetry); err != nil {
+			fmt.Printf("Failed to trigger PrepareRetry event: %v\n", err)
+		}
+	case DeliveryFailed:
+		if err := fsm.TriggerEvent(DeliveryRetry); err != nil {
+			fmt.Printf("Failed to trigger DeliveryRetry event: %v\n", err)
+		}
 	}
 }
 
-// SetMaxWorkers sets the maximum number of concurrent workers for the watcher.
-func (w *Watcher) SetMaxWorkers(maxWorkers int64) {
-	w.MaxWorkers = maxWorkers
+// GetStateMachineStatus 获取状态机状态（用于监控）
+func (w *UnifiedWatcher) GetStateMachineStatus(jobID string) (State, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if fsm, exists := w.stateMachines[jobID]; exists {
+		return fsm.GetCurrentState(), true
+	}
+	return "", false
 }
 
-func init() {
-	registry.Register(known.MessageBatchWatcher, &Watcher{})
+// GetActiveStateMachines 获取活跃状态机数量
+func (w *UnifiedWatcher) GetActiveStateMachines() int {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return len(w.stateMachines)
 }

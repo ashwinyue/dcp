@@ -3,8 +3,6 @@ package messagebatch
 import (
 	"context"
 	"fmt"
-	"math/rand"
-	"sync"
 	"time"
 
 	"github.com/looplab/fsm"
@@ -16,7 +14,7 @@ import (
 // Preparation Phase Handlers
 
 // OnPreparationReady handles the preparation ready state
-func (usm *UnifiedStateMachine) OnPreparationReady(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationReady(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Preparation phase ready", "job_id", usm.job.JobID)
 
 	// Initialize preparation phase
@@ -40,7 +38,7 @@ func (usm *UnifiedStateMachine) OnPreparationReady(ctx context.Context, event *f
 }
 
 // OnPreparationRunning handles the preparation running state
-func (usm *UnifiedStateMachine) OnPreparationRunning(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationRunning(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Preparation phase running", "job_id", usm.job.JobID)
 
 	// Apply rate limiting
@@ -68,7 +66,7 @@ func (usm *UnifiedStateMachine) OnPreparationRunning(ctx context.Context, event 
 }
 
 // OnPreparationPausing handles the preparation pausing state
-func (usm *UnifiedStateMachine) OnPreparationPausing(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationPausing(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Preparation phase pausing", "job_id", usm.job.JobID)
 
 	// Signal all workers to pause
@@ -81,7 +79,7 @@ func (usm *UnifiedStateMachine) OnPreparationPausing(ctx context.Context, event 
 }
 
 // OnPreparationPaused handles the preparation paused state
-func (usm *UnifiedStateMachine) OnPreparationPaused(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationPaused(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Preparation phase paused", "job_id", usm.job.JobID)
 
 	// Save current statistics
@@ -96,7 +94,7 @@ func (usm *UnifiedStateMachine) OnPreparationPaused(ctx context.Context, event *
 }
 
 // OnPreparationCompleted handles the preparation completed state
-func (usm *UnifiedStateMachine) OnPreparationCompleted(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationCompleted(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Preparation phase completed", "job_id", usm.job.JobID)
 
 	// Finalize preparation statistics
@@ -128,7 +126,7 @@ func (usm *UnifiedStateMachine) OnPreparationCompleted(ctx context.Context, even
 }
 
 // OnPreparationFailed handles the preparation failed state
-func (usm *UnifiedStateMachine) OnPreparationFailed(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationFailed(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Errorw("Preparation phase failed", "job_id", usm.job.JobID, "retry_count", usm.retryCount)
 
 	usm.retryCount++
@@ -168,7 +166,7 @@ func (usm *UnifiedStateMachine) OnPreparationFailed(ctx context.Context, event *
 // Delivery Phase Handlers
 
 // OnDeliveryReady handles the delivery ready state
-func (usm *UnifiedStateMachine) OnDeliveryReady(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryReady(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Delivery phase ready", "job_id", usm.job.JobID)
 
 	// Initialize delivery phase
@@ -192,7 +190,7 @@ func (usm *UnifiedStateMachine) OnDeliveryReady(ctx context.Context, event *fsm.
 }
 
 // OnDeliveryRunning handles the delivery running state
-func (usm *UnifiedStateMachine) OnDeliveryRunning(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryRunning(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Delivery phase running", "job_id", usm.job.JobID)
 
 	// Apply rate limiting
@@ -220,7 +218,7 @@ func (usm *UnifiedStateMachine) OnDeliveryRunning(ctx context.Context, event *fs
 }
 
 // OnDeliveryPausing handles the delivery pausing state
-func (usm *UnifiedStateMachine) OnDeliveryPausing(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryPausing(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Delivery phase pausing", "job_id", usm.job.JobID)
 
 	// Signal all workers to pause
@@ -233,7 +231,7 @@ func (usm *UnifiedStateMachine) OnDeliveryPausing(ctx context.Context, event *fs
 }
 
 // OnDeliveryPaused handles the delivery paused state
-func (usm *UnifiedStateMachine) OnDeliveryPaused(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryPaused(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Delivery phase paused", "job_id", usm.job.JobID)
 
 	// Save current statistics
@@ -248,7 +246,7 @@ func (usm *UnifiedStateMachine) OnDeliveryPaused(ctx context.Context, event *fsm
 }
 
 // OnDeliveryCompleted handles the delivery completed state
-func (usm *UnifiedStateMachine) OnDeliveryCompleted(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryCompleted(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Delivery phase completed", "job_id", usm.job.JobID)
 
 	// Finalize delivery statistics
@@ -280,7 +278,7 @@ func (usm *UnifiedStateMachine) OnDeliveryCompleted(ctx context.Context, event *
 }
 
 // OnDeliveryFailed handles the delivery failed state
-func (usm *UnifiedStateMachine) OnDeliveryFailed(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryFailed(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Errorw("Delivery phase failed", "job_id", usm.job.JobID, "retry_count", usm.retryCount)
 
 	usm.retryCount++
@@ -320,7 +318,7 @@ func (usm *UnifiedStateMachine) OnDeliveryFailed(ctx context.Context, event *fsm
 // Final State Handlers
 
 // OnSucceeded handles the final success state
-func (usm *UnifiedStateMachine) OnSucceeded(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnSucceeded(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Message batch processing succeeded", "job_id", usm.job.JobID)
 
 	// Finalize all statistics
@@ -337,7 +335,7 @@ func (usm *UnifiedStateMachine) OnSucceeded(ctx context.Context, event *fsm.Even
 }
 
 // OnFailed handles the final failed state
-func (usm *UnifiedStateMachine) OnFailed(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnFailed(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Errorw("Message batch processing failed", "job_id", usm.job.JobID)
 
 	// Finalize all statistics
@@ -354,7 +352,7 @@ func (usm *UnifiedStateMachine) OnFailed(ctx context.Context, event *fsm.Event) 
 }
 
 // OnCancelled handles the cancelled state
-func (usm *UnifiedStateMachine) OnCancelled(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnCancelled(ctx context.Context, event *fsm.Event) error {
 	usm.logger.Infow("Message batch processing cancelled", "job_id", usm.job.JobID)
 
 	// Stop all ongoing operations
@@ -377,23 +375,23 @@ func (usm *UnifiedStateMachine) OnCancelled(ctx context.Context, event *fsm.Even
 
 // Helper methods
 
-func (usm *UnifiedStateMachine) canRetry() bool {
+func (usm *StateMachine) canRetry() bool {
 	return usm.retryCount < known.MessageBatchMaxRetries
 }
 
-func (usm *UnifiedStateMachine) pausePreparationWorkers(ctx context.Context) error {
+func (usm *StateMachine) pausePreparationWorkers(ctx context.Context) error {
 	usm.logger.Infow("Pausing preparation workers", "job_id", usm.job.JobID)
 	// Implementation would signal workers to pause
 	return nil
 }
 
-func (usm *UnifiedStateMachine) pauseDeliveryWorkers(ctx context.Context) error {
+func (usm *StateMachine) pauseDeliveryWorkers(ctx context.Context) error {
 	usm.logger.Infow("Pausing delivery workers", "job_id", usm.job.JobID)
 	// Implementation would signal workers to pause
 	return nil
 }
 
-func (usm *UnifiedStateMachine) cancelAllOperations(ctx context.Context) error {
+func (usm *StateMachine) cancelAllOperations(ctx context.Context) error {
 	usm.logger.Infow("Cancelling all operations", "job_id", usm.job.JobID)
 	// Implementation would cancel all ongoing operations
 	return nil
