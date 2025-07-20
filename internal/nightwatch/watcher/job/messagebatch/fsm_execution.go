@@ -14,19 +14,19 @@ import (
 
 // initializePreparation initializes the preparation phase
 func (usm *StateMachine) initializePreparation(ctx context.Context) error {
-	usm.logger.Infow("Initializing preparation phase", "job_id", usm.job.JobID)
+	usm.logger.Infow("Initializing preparation phase", "job_id", usm.Job.JobID)
 
 	// Initialize job results if needed
-	if usm.job.Results == nil {
-		usm.job.Results = &model.JobResults{}
+	if usm.Job.Results == nil {
+		usm.Job.Results = &model.JobResults{}
 	}
 
 	// Initialize preparation statistics
 	usm.updateStatistics("PREPARATION", func(stats *PhaseStatistics) {
 		stats.StartTime = time.Now()
 		// Extract total count from job params
-		if usm.job.Params != nil && usm.job.Params.MessageBatch != nil {
-			params := usm.job.Params.MessageBatch
+		if usm.Job.Params != nil && usm.Job.Params.MessageBatch != nil {
+			params := usm.Job.Params.MessageBatch
 			stats.Total = int64(len(params.Recipients))
 		} else {
 			// Default for demo purposes
@@ -45,7 +45,7 @@ func (usm *StateMachine) initializePreparation(ctx context.Context) error {
 
 // executePreparation executes the main preparation logic
 func (usm *StateMachine) executePreparation(ctx context.Context) error {
-	usm.logger.Infow("Executing preparation phase", "job_id", usm.job.JobID)
+	usm.logger.Infow("Executing preparation phase", "job_id", usm.Job.JobID)
 
 	prepStats := usm.GetStatistics("PREPARATION")
 	if prepStats == nil {
@@ -92,7 +92,7 @@ func (usm *StateMachine) executePreparation(ctx context.Context) error {
 			mu.Unlock()
 
 			usm.logger.Infow("Preparation chunk processed",
-				"job_id", usm.job.JobID,
+				"job_id", usm.Job.JobID,
 				"offset", offset,
 				"chunk_size", chunkSize,
 				"success", successCount,
@@ -128,7 +128,7 @@ func (usm *StateMachine) executePreparation(ctx context.Context) error {
 	})
 
 	usm.logger.Infow("Preparation phase execution completed",
-		"job_id", usm.job.JobID,
+		"job_id", usm.Job.JobID,
 		"total", prepStats.Total,
 		"processed", prepStats.Processed,
 		"success", prepStats.Success,
@@ -150,11 +150,11 @@ func (usm *StateMachine) isPreparationComplete(ctx context.Context) bool {
 
 // savePreparationResults saves preparation results
 func (usm *StateMachine) savePreparationResults(ctx context.Context) error {
-	usm.logger.Infow("Saving preparation results", "job_id", usm.job.JobID)
+	usm.logger.Infow("Saving preparation results", "job_id", usm.Job.JobID)
 
 	// Create batch in the business service
 	// Note: CreateBatch method not available in current service interface
-	usm.logger.Infow("Batch creation skipped - method not available", "job_id", usm.job.JobID)
+	usm.logger.Infow("Batch creation skipped - method not available", "job_id", usm.Job.JobID)
 
 	// Save statistics
 	return usm.saveStatistics(ctx)
@@ -164,7 +164,7 @@ func (usm *StateMachine) savePreparationResults(ctx context.Context) error {
 
 // initializeDelivery initializes the delivery phase
 func (usm *StateMachine) initializeDelivery(ctx context.Context) error {
-	usm.logger.Infow("Initializing delivery phase", "job_id", usm.job.JobID)
+	usm.logger.Infow("Initializing delivery phase", "job_id", usm.Job.JobID)
 
 	// Get preparation results to determine delivery total
 	prepStats := usm.GetStatistics("PREPARATION")
@@ -190,7 +190,7 @@ func (usm *StateMachine) initializeDelivery(ctx context.Context) error {
 
 // executeDelivery executes the main delivery logic
 func (usm *StateMachine) executeDelivery(ctx context.Context) error {
-	usm.logger.Infow("Executing delivery phase", "job_id", usm.job.JobID)
+	usm.logger.Infow("Executing delivery phase", "job_id", usm.Job.JobID)
 
 	deliveryStats := usm.GetStatistics("DELIVERY")
 	if deliveryStats == nil {
@@ -210,8 +210,8 @@ func (usm *StateMachine) executeDelivery(ctx context.Context) error {
 		}
 
 		partitionTasks[i] = &PartitionTask{
-			ID:           fmt.Sprintf("partition_%d_%s", i, usm.job.JobID),
-			BatchID:      usm.job.JobID,
+			ID:           fmt.Sprintf("partition_%d_%s", i, usm.Job.JobID),
+			BatchID:      usm.Job.JobID,
 			PartitionKey: fmt.Sprintf("partition_%d", i),
 			Status:       "READY", // Default status
 			MessageCount: messageCount,
@@ -221,7 +221,7 @@ func (usm *StateMachine) executeDelivery(ctx context.Context) error {
 	}
 
 	usm.logger.Infow("Initialized delivery partitions",
-		"job_id", usm.job.JobID,
+		"job_id", usm.Job.JobID,
 		"partition_count", len(partitionTasks),
 		"total_messages", deliveryStats.Total,
 		"messages_per_partition", messagesPerPartition,
@@ -251,7 +251,7 @@ func (usm *StateMachine) executeDelivery(ctx context.Context) error {
 				mu.Unlock()
 
 				usm.logger.Errorw("Partition delivery failed",
-					"job_id", usm.job.JobID,
+					"job_id", usm.Job.JobID,
 					"partition_id", partitionID,
 					"error", err,
 				)
@@ -265,7 +265,7 @@ func (usm *StateMachine) executeDelivery(ctx context.Context) error {
 				mu.Unlock()
 
 				usm.logger.Infow("Partition delivery completed",
-					"job_id", usm.job.JobID,
+					"job_id", usm.Job.JobID,
 					"partition_id", partitionID,
 					"message_count", partitionTask.MessageCount,
 				)
@@ -300,7 +300,7 @@ func (usm *StateMachine) executeDelivery(ctx context.Context) error {
 
 	deliveryStats = usm.GetStatistics("DELIVERY") // Refresh stats
 	usm.logger.Infow("Delivery phase execution completed",
-		"job_id", usm.job.JobID,
+		"job_id", usm.Job.JobID,
 		"total", deliveryStats.Total,
 		"processed", deliveryStats.Processed,
 		"success", deliveryStats.Success,
@@ -319,7 +319,7 @@ func (usm *StateMachine) executeDelivery(ctx context.Context) error {
 // processDeliveryPartition processes a single delivery partition
 func (usm *StateMachine) processDeliveryPartition(ctx context.Context, partitionID int, task *PartitionTask) error {
 	usm.logger.Infow("Processing delivery partition",
-		"job_id", usm.job.JobID,
+		"job_id", usm.Job.JobID,
 		"partition_id", partitionID,
 		"message_count", task.MessageCount,
 	)
@@ -335,19 +335,19 @@ func (usm *StateMachine) processDeliveryPartition(ctx context.Context, partition
 	messages := make([]MessageData, task.MessageCount)
 	for i := int64(0); i < task.MessageCount; i++ {
 		messages[i] = MessageData{
-			ID:        fmt.Sprintf("%s_p%d_msg_%d", usm.job.JobID, partitionID, i),
-			Recipient: fmt.Sprintf("user_%d", i),
-			Content:   fmt.Sprintf("Message %d from partition %d", i, partitionID),
-			Type:      "SMS",
+			ID:           fmt.Sprintf("%s_p%d_msg_%d", usm.Job.JobID, partitionID, i),
+			Recipient:    fmt.Sprintf("user_%d", i),
+			Content:      fmt.Sprintf("Message %d from partition %d", i, partitionID),
+			Type:         "SMS",
 			PartitionKey: fmt.Sprintf("partition_%d", partitionID),
-			CreatedAt: time.Now(),
+			CreatedAt:    time.Now(),
 		}
 	}
 
 	// Process messages through the business service
 	// Note: ProcessBatch method not available in current service interface
 	usm.logger.Infow("Batch processing skipped - method not available",
-		"job_id", usm.job.JobID,
+		"job_id", usm.Job.JobID,
 		"partition_id", partitionID,
 		"message_count", len(messages),
 	)
@@ -385,7 +385,7 @@ func (usm *StateMachine) isDeliveryComplete(ctx context.Context) bool {
 
 // saveDeliveryResults saves delivery results
 func (usm *StateMachine) saveDeliveryResults(ctx context.Context) error {
-	usm.logger.Infow("Saving delivery results", "job_id", usm.job.JobID)
+	usm.logger.Infow("Saving delivery results", "job_id", usm.Job.JobID)
 
 	// Save statistics
 	return usm.saveStatistics(ctx)

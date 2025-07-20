@@ -2,242 +2,236 @@ package messagebatch
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/looplab/fsm"
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
+	fsmutil "github.com/ashwinyue/dcp/internal/pkg/util/fsm"
 	v1 "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1"
 )
 
-// State constants
+// Step represents the current processing step
+type Step string
+
 const (
-	// Initial states
-	Pending = "PENDING"
+	StepPreparation Step = "PREPARATION"
+	StepDelivery    Step = "DELIVERY"
+)
+
+// State constants for each step
+const (
+	// Initial state
+	StateInitial = "INITIAL"
 	
 	// Preparation states
-	PreparationReady     = "PREPARATION_READY"
-	PreparationRunning   = "PREPARATION_RUNNING"
-	PreparationPausing   = "PREPARATION_PAUSING"
-	PreparationPaused    = "PREPARATION_PAUSED"
-	PreparationCompleted = "PREPARATION_COMPLETED"
-	PreparationFailed    = "PREPARATION_FAILED"
+	StatePreparationReady     = "PREPARATION_READY"
+	StatePreparationRunning   = "PREPARATION_RUNNING"
+	StatePreparationPausing   = "PREPARATION_PAUSING"
+	StatePreparationPaused    = "PREPARATION_PAUSED"
+	StatePreparationCompleted = "PREPARATION_COMPLETED"
+	StatePreparationFailed    = "PREPARATION_FAILED"
 	
 	// Delivery states
-	DeliveryReady     = "DELIVERY_READY"
-	DeliveryRunning   = "DELIVERY_RUNNING"
-	DeliveryPausing   = "DELIVERY_PAUSING"
-	DeliveryPaused    = "DELIVERY_PAUSED"
-	DeliveryCompleted = "DELIVERY_COMPLETED"
-	DeliveryFailed    = "DELIVERY_FAILED"
+	StateDeliveryReady     = "DELIVERY_READY"
+	StateDeliveryRunning   = "DELIVERY_RUNNING"
+	StateDeliveryPausing   = "DELIVERY_PAUSING"
+	StateDeliveryPaused    = "DELIVERY_PAUSED"
+	StateDeliveryCompleted = "DELIVERY_COMPLETED"
+	StateDeliveryFailed    = "DELIVERY_FAILED"
 	
 	// Final states
-	Succeeded = "SUCCEEDED"
-	Failed    = "FAILED"
-	Cancelled = "CANCELLED"
+	StateSucceeded = "SUCCEEDED"
+	StateFailed    = "FAILED"
+	StateCancelled = "CANCELLED"
 )
 
 // Event constants
 const (
 	// Preparation events
-	PrepareStart    = "PREPARE_START"
-	PrepareBegin    = "PREPARE_BEGIN"
-	PreparePause    = "PREPARE_PAUSE"
-	PreparePaused   = "PREPARE_PAUSED"
-	PrepareResume   = "PREPARE_RESUME"
-	PrepareComplete = "PREPARE_COMPLETE"
-	PrepareFail     = "PREPARE_FAIL"
-	PrepareRetry    = "PREPARE_RETRY"
+	EventPrepareStart    = "PREPARE_START"
+	EventPrepareBegin    = "PREPARE_BEGIN"
+	EventPreparePause    = "PREPARE_PAUSE"
+	EventPreparePaused   = "PREPARE_PAUSED"
+	EventPrepareResume   = "PREPARE_RESUME"
+	EventPrepareComplete = "PREPARE_COMPLETE"
+	EventPrepareFail     = "PREPARE_FAIL"
+	EventPrepareRetry    = "PREPARE_RETRY"
 	
 	// Delivery events
-	DeliveryStart    = "DELIVERY_START"
-	DeliveryBegin    = "DELIVERY_BEGIN"
-	DeliveryPause    = "DELIVERY_PAUSE"
-	DeliveryResume   = "DELIVERY_RESUME"
-	DeliveryComplete = "DELIVERY_COMPLETE"
-	DeliveryFail     = "DELIVERY_FAIL"
-	DeliveryRetry    = "DELIVERY_RETRY"
+	EventDeliveryStart    = "DELIVERY_START"
+	EventDeliveryBegin    = "DELIVERY_BEGIN"
+	EventDeliveryPause    = "DELIVERY_PAUSE"
+	EventDeliveryPaused   = "DELIVERY_PAUSED"
+	EventDeliveryResume   = "DELIVERY_RESUME"
+	EventDeliveryComplete = "DELIVERY_COMPLETE"
+	EventDeliveryFail     = "DELIVERY_FAIL"
+	EventDeliveryRetry    = "DELIVERY_RETRY"
 	
 	// Final events
-	Complete = "COMPLETE"
-	Fail     = "FAIL"
-	Cancel   = "CANCEL"
+	EventComplete = "COMPLETE"
+	EventFail     = "FAIL"
+	EventCancel   = "CANCEL"
 )
 
-// StateMachine represents the state machine for message batch processing
+
+
+// StateMachine represents a finite state machine for managing message batch jobs.
 type StateMachine struct {
-	watcher    *Watcher
-	job        *model.JobM
-	fsm        *fsm.FSM
-	statistics map[string]*PhaseStatistics
-	retryCount int
-	startTime  time.Time
-	mu         sync.RWMutex
-	logger     log.Logger
+	Watcher         *Watcher
+	Job             *model.JobM
+	FSM             *fsm.FSM
+	CurrentStep     Step
+	logger          log.Logger
+	retryCount      int
+	callbackHandler CallbackHandler
+	stats           map[string]*PhaseStatistics
 }
 
-// NewStateMachine creates a new state machine
-func NewStateMachine(watcher *Watcher, job *model.JobM) *StateMachine {
-	initial := Pending
-	usm := &StateMachine{
-		watcher: watcher,
-		job:     job,
-		statistics: map[string]*PhaseStatistics{
-			"PREPARATION": {
-				StartTime:  time.Now(),
-				RetryCount: 0,
-			},
-			"DELIVERY": {
-				StartTime:  time.Now(),
-				RetryCount: 0,
-				Partitions: 10, // Default partition count
-			},
-		},
-		retryCount: 0,
-		startTime:  time.Now(),
-		logger:     log.New(nil),
+// NewStateMachine initializes a new StateMachine with the given initial state, watcher, and job.
+// It configures the FSM with defined events and their corresponding state transitions,
+// as well as callbacks for entering specific states.
+func NewStateMachine(initial string, watcher *Watcher, job *model.JobM) *StateMachine {
+	sm := &StateMachine{
+		Watcher:     watcher,
+		Job:         job,
+		CurrentStep: StepPreparation, // Start with preparation step
+		logger:      log.New(nil),
+		stats:       make(map[string]*PhaseStatistics),
 	}
 
-	// Define all possible state transitions
-	usm.fsm = fsm.NewFSM(
+	sm.FSM = fsm.NewFSM(
 		initial,
 		fsm.Events{
 			// Preparation phase transitions
-			{Name: PrepareStart, Src: []string{Pending}, Dst: PreparationReady},
-			{Name: PrepareBegin, Src: []string{PreparationReady, PreparationPaused}, Dst: PreparationRunning},
-			{Name: PreparePause, Src: []string{PreparationRunning}, Dst: PreparationPausing},
-			{Name: PreparePaused, Src: []string{PreparationPausing}, Dst: PreparationPaused},
-			{Name: PrepareResume, Src: []string{PreparationPaused}, Dst: PreparationReady},
-			{Name: PrepareComplete, Src: []string{PreparationRunning}, Dst: PreparationCompleted},
-			{Name: PrepareFail, Src: []string{PreparationRunning}, Dst: PreparationFailed},
-			{Name: PrepareRetry, Src: []string{PreparationFailed}, Dst: PreparationReady},
+			{Name: EventPrepareStart, Src: []string{StateInitial}, Dst: StatePreparationReady},
+			{Name: EventPrepareBegin, Src: []string{StatePreparationReady, StatePreparationPaused}, Dst: StatePreparationRunning},
+			{Name: EventPreparePause, Src: []string{StatePreparationRunning}, Dst: StatePreparationPausing},
+			{Name: EventPreparePaused, Src: []string{StatePreparationPausing}, Dst: StatePreparationPaused},
+			{Name: EventPrepareResume, Src: []string{StatePreparationPaused}, Dst: StatePreparationReady},
+			{Name: EventPrepareComplete, Src: []string{StatePreparationRunning}, Dst: StatePreparationCompleted},
+			{Name: EventPrepareFail, Src: []string{StatePreparationRunning}, Dst: StatePreparationFailed},
+			{Name: EventPrepareRetry, Src: []string{StatePreparationFailed}, Dst: StatePreparationReady},
 
 			// Delivery phase transitions
-			{Name: DeliveryStart, Src: []string{PreparationCompleted}, Dst: DeliveryReady},
-			{Name: DeliveryBegin, Src: []string{DeliveryReady, DeliveryPaused}, Dst: DeliveryRunning},
-			{Name: DeliveryPause, Src: []string{DeliveryRunning}, Dst: DeliveryPausing},
-			{Name: DeliveryPaused, Src: []string{DeliveryPausing}, Dst: DeliveryPaused},
-			{Name: DeliveryResume, Src: []string{DeliveryPaused}, Dst: DeliveryReady},
-			{Name: DeliveryComplete, Src: []string{DeliveryRunning}, Dst: DeliveryCompleted},
-			{Name: DeliveryFail, Src: []string{DeliveryRunning}, Dst: DeliveryFailed},
-			{Name: DeliveryRetry, Src: []string{DeliveryFailed}, Dst: DeliveryReady},
+			{Name: EventDeliveryStart, Src: []string{StatePreparationCompleted}, Dst: StateDeliveryReady},
+			{Name: EventDeliveryBegin, Src: []string{StateDeliveryReady, StateDeliveryPaused}, Dst: StateDeliveryRunning},
+			{Name: EventDeliveryPause, Src: []string{StateDeliveryRunning}, Dst: StateDeliveryPausing},
+			{Name: EventDeliveryPaused, Src: []string{StateDeliveryPausing}, Dst: StateDeliveryPaused},
+			{Name: EventDeliveryResume, Src: []string{StateDeliveryPaused}, Dst: StateDeliveryReady},
+			{Name: EventDeliveryComplete, Src: []string{StateDeliveryRunning}, Dst: StateDeliveryCompleted},
+			{Name: EventDeliveryFail, Src: []string{StateDeliveryRunning}, Dst: StateDeliveryFailed},
+			{Name: EventDeliveryRetry, Src: []string{StateDeliveryFailed}, Dst: StateDeliveryReady},
 
 			// Final state transitions
-			{Name: Complete, Src: []string{DeliveryCompleted}, Dst: Succeeded},
-			{Name: Fail, Src: []string{PreparationFailed, DeliveryFailed}, Dst: Failed},
-			{Name: Cancel, Src: []string{"*"}, Dst: Cancelled},
+			{Name: EventComplete, Src: []string{StateDeliveryCompleted}, Dst: StateSucceeded},
+			{Name: EventFail, Src: []string{StatePreparationFailed, StateDeliveryFailed}, Dst: StateFailed},
+			{Name: EventCancel, Src: []string{"*"}, Dst: StateCancelled},
 		},
-		fsm.Callbacks{},
+		fsm.Callbacks{
+			// enter_state 先于 enter_xxx 执行。
+			"enter_state": fsmutil.WrapEvent(sm.EnterState),
+			
+			// Preparation state callbacks
+			"enter_" + StatePreparationReady:     fsmutil.WrapEvent(sm.EnterPreparationReady),
+			"enter_" + StatePreparationRunning:   fsmutil.WrapEvent(sm.StartPreparation),
+			"enter_" + StatePreparationCompleted: fsmutil.WrapEvent(sm.CompletePreparation),
+			"enter_" + StatePreparationFailed:    fsmutil.WrapEvent(sm.FailPreparation),
+			
+			// Delivery state callbacks
+			"enter_" + StateDeliveryReady:     fsmutil.WrapEvent(sm.EnterDeliveryReady),
+			"enter_" + StateDeliveryRunning:   fsmutil.WrapEvent(sm.StartDelivery),
+			"enter_" + StateDeliveryCompleted: fsmutil.WrapEvent(sm.CompleteDelivery),
+			"enter_" + StateDeliveryFailed:    fsmutil.WrapEvent(sm.FailDelivery),
+			
+			// Final state callbacks
+			"enter_" + StateSucceeded: fsmutil.WrapEvent(sm.Complete),
+			"enter_" + StateFailed:    fsmutil.WrapEvent(sm.Fail),
+		},
 	)
 
-	return usm
+	return sm
 }
 
 // StateManager interface implementation
 func (usm *StateMachine) GetCurrentState() string {
-	return usm.fsm.Current()
+	return usm.FSM.Current()
 }
 
 func (usm *StateMachine) CanTransition(event string) bool {
-	return usm.fsm.Can(event)
+	return usm.FSM.Can(event)
 }
 
 func (usm *StateMachine) Transition(ctx context.Context, event string) error {
-	return usm.fsm.Event(ctx, event)
+	return usm.FSM.Event(ctx, event)
 }
 
 // TriggerEvent triggers an event on the state machine
 func (usm *StateMachine) TriggerEvent(event string) error {
-	return usm.fsm.Event(context.Background(), event)
+	oldState := usm.FSM.Current()
+	err := usm.FSM.Event(context.Background(), event)
+	if err != nil {
+		return err
+	}
+	
+	// Trigger status change callback
+	newState := usm.FSM.Current()
+	if oldState != newState {
+		if usm.Watcher != nil {
+			// Handle status change through watcher
+		}
+	}
+	
+	return nil
 }
 
 func (usm *StateMachine) GetValidEvents() []string {
-	return usm.fsm.AvailableTransitions()
+	return usm.FSM.AvailableTransitions()
 }
 
 // GetStatistics returns statistics for a specific phase
 func (usm *StateMachine) GetStatistics(phase string) *PhaseStatistics {
-	usm.mu.RLock()
-	defer usm.mu.RUnlock()
-	return usm.statistics[phase]
+	// TODO: Implement statistics tracking
+	return nil
 }
 
 // GetAllStatistics returns all phase statistics
 func (usm *StateMachine) GetAllStatistics() map[string]*PhaseStatistics {
-	usm.mu.RLock()
-	defer usm.mu.RUnlock()
-	stats := make(map[string]*PhaseStatistics)
-	for k, v := range usm.statistics {
-		stats[k] = v
-	}
-	return stats
+	// TODO: Implement statistics tracking
+	return make(map[string]*PhaseStatistics)
 }
 
-// EnterState handles state transitions and updates job status
-func (usm *StateMachine) EnterState(event *fsm.Event) {
-	currentState := event.FSM.Current()
 
-	usm.logger.Infow("FSM state transition",
-		"job_id", usm.job.JobID,
-		"event", event.Event,
-		"from", event.Src,
-		"to", currentState)
-
-	// Update job status
-	usm.job.Status = currentState
-
-	// Handle timeout check
-	if usm.isTimeout() {
-		usm.job.Status = Failed
-		endTime := time.Now()
-		usm.job.EndedAt = endTime
-	}
-
-	// Handle error cases
-	if event.Err != nil {
-		usm.job.Status = Failed
-		endTime := time.Now()
-		usm.job.EndedAt = endTime
-	}
-
-	// Update job in store
-	ctx := context.Background()
-	if err := usm.watcher.store.Update(ctx, usm.job); err != nil {
-		usm.logger.Errorw("Failed to update job", "job_id", usm.job.JobID, "error", err)
-	}
-}
 
 // isTimeout checks if the batch processing has timed out
 func (usm *StateMachine) isTimeout() bool {
 	timeout := time.Duration(3600+3600) * time.Second // 1 hour for each phase
-	return time.Since(usm.startTime) > timeout
+	if usm.Job.CreatedAt.IsZero() {
+		return false
+	}
+	return time.Since(usm.Job.CreatedAt) > timeout
 }
 
 // Stop stops the state machine
 func (usm *StateMachine) Stop() {
 	// Implementation for stopping the state machine
-	usm.logger.Infow("Stopping state machine", "job_id", usm.job.JobID)
+	// TODO: Add proper logging
 }
 
 // updateStatistics updates statistics for a specific phase
 func (usm *StateMachine) updateStatistics(phase string, updater func(*PhaseStatistics)) {
-	usm.mu.Lock()
-	defer usm.mu.Unlock()
-	if stats, exists := usm.statistics[phase]; exists {
-		updater(stats)
-	}
+	// TODO: Implement statistics tracking
 }
 
 // saveStatistics saves current statistics to job results
 func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 	// Initialize job results if needed
-	if usm.job.Results == nil {
-		usm.job.Results = &model.JobResults{}
+	if usm.Job.Results == nil {
+		usm.Job.Results = &model.JobResults{}
 	}
 
-	results := (*v1.JobResults)(usm.job.Results)
+	results := (*v1.JobResults)(usm.Job.Results)
 
 	// Initialize MessageBatch if needed
 	if results.MessageBatch == nil {
@@ -302,7 +296,7 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 
 	// Update overall batch status
 	currentPhase := usm.getCurrentPhase()
-	currentState := usm.job.Status
+	currentState := usm.Job.Status
 	batchRetryCount := int64(usm.retryCount)
 
 	results.MessageBatch.CurrentPhase = &currentPhase
@@ -316,20 +310,20 @@ func (usm *StateMachine) saveStatistics(ctx context.Context) error {
 func (usm *StateMachine) getCurrentPhase() string {
 	state := usm.GetCurrentState()
 	switch {
-	case state == Pending ||
-		state == PreparationReady ||
-		state == PreparationRunning ||
-		state == PreparationPausing ||
-		state == PreparationPaused ||
-		state == PreparationCompleted ||
-		state == PreparationFailed:
+	case state == StateInitial ||
+		state == StatePreparationReady ||
+		state == StatePreparationRunning ||
+		state == StatePreparationPausing ||
+		state == StatePreparationPaused ||
+		state == StatePreparationCompleted ||
+		state == StatePreparationFailed:
 		return "PREPARATION"
-	case state == DeliveryReady ||
-		state == DeliveryRunning ||
-		state == DeliveryPausing ||
-		state == DeliveryPaused ||
-		state == DeliveryCompleted ||
-		state == DeliveryFailed:
+	case state == StateDeliveryReady ||
+		state == StateDeliveryRunning ||
+		state == StateDeliveryPausing ||
+		state == StateDeliveryPaused ||
+		state == StateDeliveryCompleted ||
+		state == StateDeliveryFailed:
 		return "DELIVERY"
 	default:
 		return "UNKNOWN"

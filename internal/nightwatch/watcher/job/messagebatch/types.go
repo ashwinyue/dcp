@@ -175,3 +175,81 @@ type MonitoringCollector interface {
 	// RecordRetry records a retry attempt
 	RecordRetry(batchID, phase string, retryCount int)
 }
+
+// CallbackHandler interface for handling callbacks during batch processing
+type CallbackHandler interface {
+	// OnPhaseStart called when a phase starts
+	OnPhaseStart(ctx context.Context, batchID, phase string) error
+	// OnPhaseProgress called during phase execution with progress updates
+	OnPhaseProgress(ctx context.Context, batchID, phase string, stats *PhaseStatistics) error
+	// OnPhaseComplete called when a phase completes successfully
+	OnPhaseComplete(ctx context.Context, batchID, phase string, stats *PhaseStatistics) error
+	// OnPhaseFailed called when a phase fails
+	OnPhaseFailed(ctx context.Context, batchID, phase string, err error, stats *PhaseStatistics) error
+	// OnBatchComplete called when entire batch processing completes
+	OnBatchComplete(ctx context.Context, batchID string, finalStats map[string]*PhaseStatistics) error
+	// OnBatchFailed called when entire batch processing fails
+	OnBatchFailed(ctx context.Context, batchID string, err error, finalStats map[string]*PhaseStatistics) error
+	// OnStatusChange called when batch status changes
+	OnStatusChange(ctx context.Context, batchID, oldStatus, newStatus string) error
+}
+
+// EventType represents different types of events
+type EventType string
+
+const (
+	EventPhaseStart    EventType = "PHASE_START"
+	EventPhaseProgress EventType = "PHASE_PROGRESS"
+	EventPhaseComplete EventType = "PHASE_COMPLETE"
+	EventPhaseFailed   EventType = "PHASE_FAILED"
+	EventBatchComplete EventType = "BATCH_COMPLETE"
+	EventBatchFailed   EventType = "BATCH_FAILED"
+	EventStatusChange  EventType = "STATUS_CHANGE"
+	EventRetry         EventType = "RETRY"
+	EventPause         EventType = "PAUSE"
+	EventResume        EventType = "RESUME"
+)
+
+// BatchEvent represents an event during batch processing
+type BatchEvent struct {
+	ID        string                 `json:"id"`
+	BatchID   string                 `json:"batch_id"`
+	Type      EventType              `json:"type"`
+	Phase     string                 `json:"phase,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	Error     string                 `json:"error,omitempty"`
+	Stats     *PhaseStatistics       `json:"stats,omitempty"`
+}
+
+// EventListener interface for listening to batch events
+type EventListener interface {
+	// OnEvent called when an event occurs
+	OnEvent(ctx context.Context, event *BatchEvent) error
+	// GetEventTypes returns the event types this listener is interested in
+	GetEventTypes() []EventType
+}
+
+// EventBus interface for managing event listeners and publishing events
+type EventBus interface {
+	// Subscribe adds an event listener
+	Subscribe(listener EventListener) error
+	// Unsubscribe removes an event listener
+	Unsubscribe(listener EventListener) error
+	// Publish publishes an event to all interested listeners
+	Publish(ctx context.Context, event *BatchEvent) error
+	// PublishAsync publishes an event asynchronously
+	PublishAsync(ctx context.Context, event *BatchEvent)
+}
+
+// StatusCallback represents a callback function for status changes
+type StatusCallback func(ctx context.Context, batchID, oldStatus, newStatus string, stats map[string]*PhaseStatistics) error
+
+// ProgressCallback represents a callback function for progress updates
+type ProgressCallback func(ctx context.Context, batchID, phase string, stats *PhaseStatistics) error
+
+// ErrorCallback represents a callback function for error handling
+type ErrorCallback func(ctx context.Context, batchID, phase string, err error, stats *PhaseStatistics) (shouldRetry bool, retryDelay time.Duration)
+
+// CompletionCallback represents a callback function for completion events
+type CompletionCallback func(ctx context.Context, batchID string, success bool, finalStats map[string]*PhaseStatistics) error
