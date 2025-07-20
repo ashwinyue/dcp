@@ -14,12 +14,14 @@ import (
 // Preparation Phase Handlers
 
 // OnPreparationReady handles the preparation ready state
-func (usm *StateMachine) OnPreparationReady(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationReady(event *fsm.Event) {
 	usm.logger.Infow("Preparation phase ready", "job_id", usm.job.JobID)
 
 	// Initialize preparation phase
+	ctx := context.Background()
 	if err := usm.initializePreparation(ctx); err != nil {
-		return fmt.Errorf("failed to initialize preparation: %w", err)
+		usm.logger.Errorw("Failed to initialize preparation", "job_id", usm.job.JobID, "error", err)
+		return
 	}
 
 	// Mark job condition as ready
@@ -33,12 +35,10 @@ func (usm *StateMachine) OnPreparationReady(ctx context.Context, event *fsm.Even
 			usm.logger.Errorw("Failed to auto-transition to preparation running", "job_id", usm.job.JobID, "error", err)
 		}
 	}()
-
-	return nil
 }
 
 // OnPreparationRunning handles the preparation running state
-func (usm *StateMachine) OnPreparationRunning(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationRunning(event *fsm.Event) {
 	usm.logger.Infow("Preparation phase running", "job_id", usm.job.JobID)
 
 	// Apply rate limiting
@@ -46,6 +46,7 @@ func (usm *StateMachine) OnPreparationRunning(ctx context.Context, event *fsm.Ev
 
 	// Execute preparation logic asynchronously
 	go func() {
+		ctx := context.Background()
 		if err := usm.executePreparation(ctx); err != nil {
 			usm.logger.Errorw("Preparation execution failed", "job_id", usm.job.JobID, "error", err)
 			if transErr := usm.fsm.Event(ctx, known.MessageBatchEventPrepareFail); transErr != nil {
@@ -61,40 +62,39 @@ func (usm *StateMachine) OnPreparationRunning(ctx context.Context, event *fsm.Ev
 			}
 		}
 	}()
-
-	return nil
 }
 
 // OnPreparationPausing handles the preparation pausing state
-func (usm *StateMachine) OnPreparationPausing(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationPausing(event *fsm.Event) {
 	usm.logger.Infow("Preparation phase pausing", "job_id", usm.job.JobID)
 
 	// Signal all workers to pause
+	ctx := context.Background()
 	if err := usm.pausePreparationWorkers(ctx); err != nil {
-		return fmt.Errorf("failed to pause preparation workers: %w", err)
+		usm.logger.Errorw("Failed to pause preparation workers", "job_id", usm.job.JobID, "error", err)
+		return
 	}
 
 	// Transition to paused state once all workers are paused
-	return usm.fsm.Event(ctx, known.MessageBatchEventPreparePaused)
+	usm.fsm.Event(ctx, known.MessageBatchEventPreparePaused)
 }
 
 // OnPreparationPaused handles the preparation paused state
-func (usm *StateMachine) OnPreparationPaused(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationPaused(event *fsm.Event) {
 	usm.logger.Infow("Preparation phase paused", "job_id", usm.job.JobID)
 
 	// Save current statistics
+	ctx := context.Background()
 	if err := usm.saveStatistics(ctx); err != nil {
 		usm.logger.Errorw("Failed to save statistics", "job_id", usm.job.JobID, "error", err)
 	}
 
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchPreparationPaused)
 	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
-
-	return nil
 }
 
 // OnPreparationCompleted handles the preparation completed state
-func (usm *StateMachine) OnPreparationCompleted(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationCompleted(event *fsm.Event) {
 	usm.logger.Infow("Preparation phase completed", "job_id", usm.job.JobID)
 
 	// Finalize preparation statistics
@@ -107,8 +107,10 @@ func (usm *StateMachine) OnPreparationCompleted(ctx context.Context, event *fsm.
 	})
 
 	// Save preparation results
+	ctx := context.Background()
 	if err := usm.savePreparationResults(ctx); err != nil {
-		return fmt.Errorf("failed to save preparation results: %w", err)
+		usm.logger.Errorw("Failed to save preparation results", "job_id", usm.job.JobID, "error", err)
+		return
 	}
 
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchPreparationCompleted)
@@ -121,12 +123,10 @@ func (usm *StateMachine) OnPreparationCompleted(ctx context.Context, event *fsm.
 			usm.logger.Errorw("Failed to start delivery phase", "job_id", usm.job.JobID, "error", err)
 		}
 	}()
-
-	return nil
 }
 
 // OnPreparationFailed handles the preparation failed state
-func (usm *StateMachine) OnPreparationFailed(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnPreparationFailed(event *fsm.Event) {
 	usm.logger.Errorw("Preparation phase failed", "job_id", usm.job.JobID, "retry_count", usm.retryCount)
 
 	usm.retryCount++
@@ -146,7 +146,7 @@ func (usm *StateMachine) OnPreparationFailed(ctx context.Context, event *fsm.Eve
 			}
 		}()
 
-		return nil
+		return
 	}
 
 	// Mark as permanently failed
@@ -160,18 +160,21 @@ func (usm *StateMachine) OnPreparationFailed(ctx context.Context, event *fsm.Eve
 	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
 
 	// Transition to final failed state
-	return usm.fsm.Event(ctx, known.MessageBatchEventFail)
+	ctx := context.Background()
+	usm.fsm.Event(ctx, known.MessageBatchEventFail)
 }
 
 // Delivery Phase Handlers
 
 // OnDeliveryReady handles the delivery ready state
-func (usm *StateMachine) OnDeliveryReady(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryReady(event *fsm.Event) {
 	usm.logger.Infow("Delivery phase ready", "job_id", usm.job.JobID)
 
 	// Initialize delivery phase
+	ctx := context.Background()
 	if err := usm.initializeDelivery(ctx); err != nil {
-		return fmt.Errorf("failed to initialize delivery: %w", err)
+		usm.logger.Errorw("Failed to initialize delivery", "job_id", usm.job.JobID, "error", err)
+		return
 	}
 
 	// Mark job condition as ready
@@ -185,12 +188,10 @@ func (usm *StateMachine) OnDeliveryReady(ctx context.Context, event *fsm.Event) 
 			usm.logger.Errorw("Failed to auto-transition to delivery running", "job_id", usm.job.JobID, "error", err)
 		}
 	}()
-
-	return nil
 }
 
 // OnDeliveryRunning handles the delivery running state
-func (usm *StateMachine) OnDeliveryRunning(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryRunning(event *fsm.Event) {
 	usm.logger.Infow("Delivery phase running", "job_id", usm.job.JobID)
 
 	// Apply rate limiting
@@ -198,6 +199,7 @@ func (usm *StateMachine) OnDeliveryRunning(ctx context.Context, event *fsm.Event
 
 	// Execute delivery logic asynchronously
 	go func() {
+		ctx := context.Background()
 		if err := usm.executeDelivery(ctx); err != nil {
 			usm.logger.Errorw("Delivery execution failed", "job_id", usm.job.JobID, "error", err)
 			if transErr := usm.fsm.Event(ctx, known.MessageBatchEventDeliveryFail); transErr != nil {
@@ -213,40 +215,39 @@ func (usm *StateMachine) OnDeliveryRunning(ctx context.Context, event *fsm.Event
 			}
 		}
 	}()
-
-	return nil
 }
 
 // OnDeliveryPausing handles the delivery pausing state
-func (usm *StateMachine) OnDeliveryPausing(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryPausing(event *fsm.Event) {
 	usm.logger.Infow("Delivery phase pausing", "job_id", usm.job.JobID)
 
 	// Signal all workers to pause
+	ctx := context.Background()
 	if err := usm.pauseDeliveryWorkers(ctx); err != nil {
-		return fmt.Errorf("failed to pause delivery workers: %w", err)
+		usm.logger.Errorw("Failed to pause delivery workers", "job_id", usm.job.JobID, "error", err)
+		return
 	}
 
 	// Transition to paused state once all workers are paused
-	return usm.fsm.Event(ctx, known.MessageBatchEventDeliveryPaused)
+	usm.fsm.Event(ctx, known.MessageBatchEventDeliveryPaused)
 }
 
 // OnDeliveryPaused handles the delivery paused state
-func (usm *StateMachine) OnDeliveryPaused(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryPaused(event *fsm.Event) {
 	usm.logger.Infow("Delivery phase paused", "job_id", usm.job.JobID)
 
 	// Save current statistics
+	ctx := context.Background()
 	if err := usm.saveStatistics(ctx); err != nil {
 		usm.logger.Errorw("Failed to save statistics", "job_id", usm.job.JobID, "error", err)
 	}
 
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchDeliveryPaused)
 	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
-
-	return nil
 }
 
 // OnDeliveryCompleted handles the delivery completed state
-func (usm *StateMachine) OnDeliveryCompleted(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryCompleted(event *fsm.Event) {
 	usm.logger.Infow("Delivery phase completed", "job_id", usm.job.JobID)
 
 	// Finalize delivery statistics
@@ -259,8 +260,10 @@ func (usm *StateMachine) OnDeliveryCompleted(ctx context.Context, event *fsm.Eve
 	})
 
 	// Save delivery results
+	ctx := context.Background()
 	if err := usm.saveDeliveryResults(ctx); err != nil {
-		return fmt.Errorf("failed to save delivery results: %w", err)
+		usm.logger.Errorw("Failed to save delivery results", "job_id", usm.job.JobID, "error", err)
+		return
 	}
 
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchDeliveryCompleted)
@@ -273,12 +276,10 @@ func (usm *StateMachine) OnDeliveryCompleted(ctx context.Context, event *fsm.Eve
 			usm.logger.Errorw("Failed to transition to success state", "job_id", usm.job.JobID, "error", err)
 		}
 	}()
-
-	return nil
 }
 
 // OnDeliveryFailed handles the delivery failed state
-func (usm *StateMachine) OnDeliveryFailed(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnDeliveryFailed(event *fsm.Event) {
 	usm.logger.Errorw("Delivery phase failed", "job_id", usm.job.JobID, "retry_count", usm.retryCount)
 
 	usm.retryCount++
@@ -298,7 +299,7 @@ func (usm *StateMachine) OnDeliveryFailed(ctx context.Context, event *fsm.Event)
 			}
 		}()
 
-		return nil
+		return
 	}
 
 	// Mark as permanently failed
@@ -312,16 +313,18 @@ func (usm *StateMachine) OnDeliveryFailed(ctx context.Context, event *fsm.Event)
 	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
 
 	// Transition to final failed state
-	return usm.fsm.Event(ctx, known.MessageBatchEventFail)
+	ctx := context.Background()
+	usm.fsm.Event(ctx, known.MessageBatchEventFail)
 }
 
 // Final State Handlers
 
 // OnSucceeded handles the final success state
-func (usm *StateMachine) OnSucceeded(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnSucceeded(event *fsm.Event) {
 	usm.logger.Infow("Message batch processing succeeded", "job_id", usm.job.JobID)
 
 	// Finalize all statistics
+	ctx := context.Background()
 	if err := usm.saveStatistics(ctx); err != nil {
 		usm.logger.Errorw("Failed to save final statistics", "job_id", usm.job.JobID, "error", err)
 	}
@@ -330,15 +333,14 @@ func (usm *StateMachine) OnSucceeded(ctx context.Context, event *fsm.Event) erro
 	usm.job.EndedAt = time.Now()
 	cond := jobconditionsutil.TrueCondition(known.MessageBatchSucceeded)
 	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
-
-	return nil
 }
 
 // OnFailed handles the final failed state
-func (usm *StateMachine) OnFailed(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnFailed(event *fsm.Event) {
 	usm.logger.Errorw("Message batch processing failed", "job_id", usm.job.JobID)
 
 	// Finalize all statistics
+	ctx := context.Background()
 	if err := usm.saveStatistics(ctx); err != nil {
 		usm.logger.Errorw("Failed to save final statistics", "job_id", usm.job.JobID, "error", err)
 	}
@@ -347,15 +349,14 @@ func (usm *StateMachine) OnFailed(ctx context.Context, event *fsm.Event) error {
 	usm.job.EndedAt = time.Now()
 	cond := jobconditionsutil.FalseCondition(known.MessageBatchFailed, "Message batch processing failed")
 	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
-
-	return nil
 }
 
 // OnCancelled handles the cancelled state
-func (usm *StateMachine) OnCancelled(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) OnCancelled(event *fsm.Event) {
 	usm.logger.Infow("Message batch processing cancelled", "job_id", usm.job.JobID)
 
 	// Stop all ongoing operations
+	ctx := context.Background()
 	if err := usm.cancelAllOperations(ctx); err != nil {
 		usm.logger.Errorw("Failed to cancel operations", "job_id", usm.job.JobID, "error", err)
 	}
@@ -369,8 +370,6 @@ func (usm *StateMachine) OnCancelled(ctx context.Context, event *fsm.Event) erro
 	usm.job.EndedAt = time.Now()
 	cond := jobconditionsutil.FalseCondition(known.MessageBatchCancelled, "Message batch processing cancelled")
 	usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
-
-	return nil
 }
 
 // Helper methods

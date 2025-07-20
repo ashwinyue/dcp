@@ -8,14 +8,65 @@ import (
 	"github.com/looplab/fsm"
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
-	known "github.com/ashwinyue/dcp/internal/pkg/known/nightwatch"
 	"github.com/ashwinyue/dcp/internal/pkg/log"
-	fsmutil "github.com/ashwinyue/dcp/internal/pkg/util/fsm"
-	jobconditionsutil "github.com/ashwinyue/dcp/internal/pkg/util/jobconditions"
-	v1 "github.com/ashwinyue/dcp/pkg/api/nightwatch/v1"
 )
 
-// StateMachine represents the state machine for SMS batch processing
+// State constants
+const (
+	// Initial states
+	Pending = "PENDING"
+	
+	// Preparation states
+	PreparationReady     = "PREPARATION_READY"
+	PreparationRunning   = "PREPARATION_RUNNING"
+	PreparationPausing   = "PREPARATION_PAUSING"
+	PreparationPaused    = "PREPARATION_PAUSED"
+	PreparationCompleted = "PREPARATION_COMPLETED"
+	PreparationFailed    = "PREPARATION_FAILED"
+	
+	// Delivery states
+	DeliveryReady     = "DELIVERY_READY"
+	DeliveryRunning   = "DELIVERY_RUNNING"
+	DeliveryPausing   = "DELIVERY_PAUSING"
+	DeliveryPaused    = "DELIVERY_PAUSED"
+	DeliveryCompleted = "DELIVERY_COMPLETED"
+	DeliveryFailed    = "DELIVERY_FAILED"
+	
+	// Final states
+	Succeeded = "SUCCEEDED"
+	Failed    = "FAILED"
+	Cancelled = "CANCELLED"
+)
+
+// Event constants
+const (
+	// Preparation events
+	PrepareStart    = "PREPARE_START"
+	PrepareBegin    = "PREPARE_BEGIN"
+	PreparePause    = "PREPARE_PAUSE"
+	PreparePaused   = "PREPARE_PAUSED"
+	PrepareResume   = "PREPARE_RESUME"
+	PrepareComplete = "PREPARE_COMPLETE"
+	PrepareFail     = "PREPARE_FAIL"
+	PrepareRetry    = "PREPARE_RETRY"
+	
+	// Delivery events
+	DeliveryStart    = "DELIVERY_START"
+	DeliveryBegin    = "DELIVERY_BEGIN"
+	DeliveryPause    = "DELIVERY_PAUSE"
+	DeliveryPaused   = "DELIVERY_PAUSED"
+	DeliveryResume   = "DELIVERY_RESUME"
+	DeliveryComplete = "DELIVERY_COMPLETE"
+	DeliveryFail     = "DELIVERY_FAIL"
+	DeliveryRetry    = "DELIVERY_RETRY"
+	
+	// Final events
+	Complete = "COMPLETE"
+	Fail     = "FAIL"
+	Cancel   = "CANCEL"
+)
+
+// StateMachine represents the state machine for message batch processing
 type StateMachine struct {
 	watcher    *Watcher
 	job        *model.JobM
@@ -40,7 +91,7 @@ func NewStateMachine(initial string, watcher *Watcher, job *model.JobM) *StateMa
 			"DELIVERY": {
 				StartTime:  time.Now(),
 				RetryCount: 0,
-				Partitions: known.MessageBatchPartitionCount,
+				Partitions: 10, // Default partition count
 			},
 		},
 		retryCount: 0,
@@ -53,53 +104,53 @@ func NewStateMachine(initial string, watcher *Watcher, job *model.JobM) *StateMa
 		initial,
 		fsm.Events{
 			// Preparation phase transitions
-			{Name: known.MessageBatchEventPrepareStart, Src: []string{known.MessageBatchPending}, Dst: known.MessageBatchPreparationReady},
-			{Name: known.MessageBatchEventPrepareBegin, Src: []string{known.MessageBatchPreparationReady, known.MessageBatchPreparationPaused}, Dst: known.MessageBatchPreparationRunning},
-			{Name: known.MessageBatchEventPreparePause, Src: []string{known.MessageBatchPreparationRunning}, Dst: known.MessageBatchPreparationPausing},
-			{Name: known.MessageBatchEventPreparePaused, Src: []string{known.MessageBatchPreparationPausing}, Dst: known.MessageBatchPreparationPaused},
-			{Name: known.MessageBatchEventPrepareResume, Src: []string{known.MessageBatchPreparationPaused}, Dst: known.MessageBatchPreparationReady},
-			{Name: known.MessageBatchEventPrepareComplete, Src: []string{known.MessageBatchPreparationRunning}, Dst: known.MessageBatchPreparationCompleted},
-			{Name: known.MessageBatchEventPrepareFail, Src: []string{known.MessageBatchPreparationRunning}, Dst: known.MessageBatchPreparationFailed},
-			{Name: known.MessageBatchEventPrepareRetry, Src: []string{known.MessageBatchPreparationFailed}, Dst: known.MessageBatchPreparationReady},
+			{Name: PrepareStart, Src: []string{Pending}, Dst: PreparationReady},
+			{Name: PrepareBegin, Src: []string{PreparationReady, PreparationPaused}, Dst: PreparationRunning},
+			{Name: PreparePause, Src: []string{PreparationRunning}, Dst: PreparationPausing},
+			{Name: PreparePaused, Src: []string{PreparationPausing}, Dst: PreparationPaused},
+			{Name: PrepareResume, Src: []string{PreparationPaused}, Dst: PreparationReady},
+			{Name: PrepareComplete, Src: []string{PreparationRunning}, Dst: PreparationCompleted},
+			{Name: PrepareFail, Src: []string{PreparationRunning}, Dst: PreparationFailed},
+			{Name: PrepareRetry, Src: []string{PreparationFailed}, Dst: PreparationReady},
 
 			// Delivery phase transitions
-			{Name: known.MessageBatchEventDeliveryStart, Src: []string{known.MessageBatchPreparationCompleted}, Dst: known.MessageBatchDeliveryReady},
-			{Name: known.MessageBatchEventDeliveryBegin, Src: []string{known.MessageBatchDeliveryReady, known.MessageBatchDeliveryPaused}, Dst: known.MessageBatchDeliveryRunning},
-			{Name: known.MessageBatchEventDeliveryPause, Src: []string{known.MessageBatchDeliveryRunning}, Dst: known.MessageBatchDeliveryPausing},
-			{Name: known.MessageBatchEventDeliveryPaused, Src: []string{known.MessageBatchDeliveryPausing}, Dst: known.MessageBatchDeliveryPaused},
-			{Name: known.MessageBatchEventDeliveryResume, Src: []string{known.MessageBatchDeliveryPaused}, Dst: known.MessageBatchDeliveryReady},
-			{Name: known.MessageBatchEventDeliveryComplete, Src: []string{known.MessageBatchDeliveryRunning}, Dst: known.MessageBatchDeliveryCompleted},
-			{Name: known.MessageBatchEventDeliveryFail, Src: []string{known.MessageBatchDeliveryRunning}, Dst: known.MessageBatchDeliveryFailed},
-			{Name: known.MessageBatchEventDeliveryRetry, Src: []string{known.MessageBatchDeliveryFailed}, Dst: known.MessageBatchDeliveryReady},
+			{Name: DeliveryStart, Src: []string{PreparationCompleted}, Dst: DeliveryReady},
+			{Name: DeliveryBegin, Src: []string{DeliveryReady, DeliveryPaused}, Dst: DeliveryRunning},
+			{Name: DeliveryPause, Src: []string{DeliveryRunning}, Dst: DeliveryPausing},
+			{Name: DeliveryPaused, Src: []string{DeliveryPausing}, Dst: DeliveryPaused},
+			{Name: DeliveryResume, Src: []string{DeliveryPaused}, Dst: DeliveryReady},
+			{Name: DeliveryComplete, Src: []string{DeliveryRunning}, Dst: DeliveryCompleted},
+			{Name: DeliveryFail, Src: []string{DeliveryRunning}, Dst: DeliveryFailed},
+			{Name: DeliveryRetry, Src: []string{DeliveryFailed}, Dst: DeliveryReady},
 
 			// Final state transitions
-			{Name: known.MessageBatchEventComplete, Src: []string{known.MessageBatchDeliveryCompleted}, Dst: known.MessageBatchSucceeded},
-			{Name: known.MessageBatchEventFail, Src: []string{known.MessageBatchPreparationFailed, known.MessageBatchDeliveryFailed}, Dst: known.MessageBatchFailed},
-			{Name: known.MessageBatchEventCancel, Src: []string{"*"}, Dst: known.MessageBatchCancelled},
+			{Name: Complete, Src: []string{DeliveryCompleted}, Dst: Succeeded},
+			{Name: Fail, Src: []string{PreparationFailed, DeliveryFailed}, Dst: Failed},
+			{Name: Cancel, Src: []string{"*"}, Dst: Cancelled},
 		},
 		fsm.Callbacks{
-			"enter_state": fsmutil.WrapEvent(usm.EnterState),
+			"enter_state": usm.EnterState,
 
 			// Preparation phase callbacks
-			"enter_" + known.MessageBatchPreparationReady:     fsmutil.WrapEvent(usm.OnPreparationReady),
-			"enter_" + known.MessageBatchPreparationRunning:   fsmutil.WrapEvent(usm.OnPreparationRunning),
-			"enter_" + known.MessageBatchPreparationPausing:   fsmutil.WrapEvent(usm.OnPreparationPausing),
-			"enter_" + known.MessageBatchPreparationPaused:    fsmutil.WrapEvent(usm.OnPreparationPaused),
-			"enter_" + known.MessageBatchPreparationCompleted: fsmutil.WrapEvent(usm.OnPreparationCompleted),
-			"enter_" + known.MessageBatchPreparationFailed:    fsmutil.WrapEvent(usm.OnPreparationFailed),
+			"enter_" + PreparationReady:     usm.OnPreparationReady,
+			"enter_" + PreparationRunning:   usm.OnPreparationRunning,
+			"enter_" + PreparationPausing:   usm.OnPreparationPausing,
+			"enter_" + PreparationPaused:    usm.OnPreparationPaused,
+			"enter_" + PreparationCompleted: usm.OnPreparationCompleted,
+			"enter_" + PreparationFailed:    usm.OnPreparationFailed,
 
 			// Delivery phase callbacks
-			"enter_" + known.MessageBatchDeliveryReady:     fsmutil.WrapEvent(usm.OnDeliveryReady),
-			"enter_" + known.MessageBatchDeliveryRunning:   fsmutil.WrapEvent(usm.OnDeliveryRunning),
-			"enter_" + known.MessageBatchDeliveryPausing:   fsmutil.WrapEvent(usm.OnDeliveryPausing),
-			"enter_" + known.MessageBatchDeliveryPaused:    fsmutil.WrapEvent(usm.OnDeliveryPaused),
-			"enter_" + known.MessageBatchDeliveryCompleted: fsmutil.WrapEvent(usm.OnDeliveryCompleted),
-			"enter_" + known.MessageBatchDeliveryFailed:    fsmutil.WrapEvent(usm.OnDeliveryFailed),
+			"enter_" + DeliveryReady:     usm.OnDeliveryReady,
+			"enter_" + DeliveryRunning:   usm.OnDeliveryRunning,
+			"enter_" + DeliveryPausing:   usm.OnDeliveryPausing,
+			"enter_" + DeliveryPaused:    usm.OnDeliveryPaused,
+			"enter_" + DeliveryCompleted: usm.OnDeliveryCompleted,
+			"enter_" + DeliveryFailed:    usm.OnDeliveryFailed,
 
 			// Final state callbacks
-			"enter_" + known.MessageBatchSucceeded: fsmutil.WrapEvent(usm.OnSucceeded),
-			"enter_" + known.MessageBatchFailed:    fsmutil.WrapEvent(usm.OnFailed),
-			"enter_" + known.MessageBatchCancelled: fsmutil.WrapEvent(usm.OnCancelled),
+			"enter_" + Succeeded: usm.OnSucceeded,
+			"enter_" + Failed:    usm.OnFailed,
+			"enter_" + Cancelled: usm.OnCancelled,
 		},
 	)
 
@@ -117,6 +168,11 @@ func (usm *StateMachine) CanTransition(event string) bool {
 
 func (usm *StateMachine) Transition(ctx context.Context, event string) error {
 	return usm.fsm.Event(ctx, event)
+}
+
+// TriggerEvent triggers an event on the state machine
+func (usm *StateMachine) TriggerEvent(event string) error {
+	return usm.fsm.Event(context.Background(), event)
 }
 
 func (usm *StateMachine) GetValidEvents() []string {
@@ -142,10 +198,10 @@ func (usm *StateMachine) GetAllStatistics() map[string]*PhaseStatistics {
 }
 
 // EnterState handles state transitions and updates job status
-func (usm *StateMachine) EnterState(ctx context.Context, event *fsm.Event) error {
+func (usm *StateMachine) EnterState(event *fsm.Event) {
 	currentState := event.FSM.Current()
 
-	usm.logger.Infow("Unified FSM state transition",
+	usm.logger.Infow("FSM state transition",
 		"job_id", usm.job.JobID,
 		"event", event.Event,
 		"from", event.Src,
@@ -156,37 +212,35 @@ func (usm *StateMachine) EnterState(ctx context.Context, event *fsm.Event) error
 
 	// Handle timeout check
 	if usm.isTimeout() {
-		usm.job.Status = known.MessageBatchFailed
+		usm.job.Status = Failed
 		endTime := time.Now()
 		usm.job.EndedAt = endTime
-
-		cond := jobconditionsutil.FalseCondition(currentState, "Batch processing timeout")
-		usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
 	}
 
 	// Handle error cases
 	if event.Err != nil {
-		usm.job.Status = known.MessageBatchFailed
+		usm.job.Status = Failed
 		endTime := time.Now()
 		usm.job.EndedAt = endTime
-
-		cond := jobconditionsutil.FalseCondition(currentState, event.Err.Error())
-		usm.job.Conditions = jobconditionsutil.Set(usm.job.Conditions, cond)
 	}
 
 	// Update job in store
-	if err := usm.watcher.Store.Job().Update(ctx, usm.job); err != nil {
+	ctx := context.Background()
+	if err := usm.watcher.store.Job().Update(ctx, usm.job); err != nil {
 		usm.logger.Errorw("Failed to update job", "job_id", usm.job.JobID, "error", err)
-		return err
 	}
-
-	return nil
 }
 
 // isTimeout checks if the batch processing has timed out
 func (usm *StateMachine) isTimeout() bool {
-	timeout := time.Duration(known.MessageBatchPreparationTimeout+known.MessageBatchDeliveryTimeout) * time.Second
+	timeout := time.Duration(3600+3600) * time.Second // 1 hour for each phase
 	return time.Since(usm.startTime) > timeout
+}
+
+// Stop stops the state machine
+func (usm *StateMachine) Stop() {
+	// Implementation for stopping the state machine
+	usm.logger.Infow("Stopping state machine", "job_id", usm.job.JobID)
 }
 
 // updateStatistics updates statistics for a specific phase
