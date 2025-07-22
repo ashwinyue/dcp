@@ -21,7 +21,6 @@ import (
 
 	"github.com/ashwinyue/dcp/internal/nightwatch/biz"
 	"github.com/ashwinyue/dcp/internal/nightwatch/cache"
-	"github.com/ashwinyue/dcp/internal/nightwatch/messaging"
 	"github.com/ashwinyue/dcp/internal/nightwatch/model"
 	"github.com/ashwinyue/dcp/internal/nightwatch/pkg/validation"
 	"github.com/ashwinyue/dcp/internal/nightwatch/store"
@@ -124,14 +123,7 @@ func (cfg *Config) NewUnionServer() (*UnionServer, error) {
 		}
 	}
 
-	// 创建Kafka消息助手 (如果配置了Kafka选项)
-	var messagingHelper *messaging.KafkaHelper
-	if cfg.KafkaOptions != nil {
-		messagingHelper, err = messaging.NewKafkaHelper(cfg.KafkaOptions, dcplog.New(nil))
-		if err != nil {
-			return nil, fmt.Errorf("创建Kafka消息助手失败: %w", err)
-		}
-	}
+
 
 	// 创建服务配置，这些配置可用来创建服务器
 	srv, err := InitializeWebServer(cfg)
@@ -142,7 +134,7 @@ func (cfg *Config) NewUnionServer() (*UnionServer, error) {
 	var watchIns *watch.Watch
 	if cfg.EnableWatcher {
 		// 创建watcher配置，传入已初始化的组件
-		watcherConfig, err := cfg.CreateWatcherConfig(db, mongoManager, cacheManager, messagingHelper)
+		watcherConfig, err := cfg.CreateWatcherConfig(db, mongoManager, cacheManager)
 		if err != nil {
 			return nil, err
 		}
@@ -216,7 +208,7 @@ func ProvideStoreWithMongo(cfg *Config) (store.IStore, error) {
 }
 
 // CreateWatcherConfig used to create configuration used by all watcher.
-func (cfg *Config) CreateWatcherConfig(db *gorm.DB, mongoManager *MongoManager, cacheManager *cache.CacheManager, messagingHelper *messaging.KafkaHelper) (*watcher.AggregateConfig, error) {
+func (cfg *Config) CreateWatcherConfig(db *gorm.DB, mongoManager *MongoManager, cacheManager *cache.CacheManager) (*watcher.AggregateConfig, error) {
 	// 获取documents集合
 	documentCollection := mongoManager.GetCollection("documents")
 
@@ -234,7 +226,6 @@ func (cfg *Config) CreateWatcherConfig(db *gorm.DB, mongoManager *MongoManager, 
 		DB:                    db,
 		Minio:                 minioClient,
 		Cache:                 cacheManager,
-		Messaging:             messagingHelper,
 		UserWatcherMaxWorkers: cfg.UserWatcherMaxWorkers,
 	}, nil
 }

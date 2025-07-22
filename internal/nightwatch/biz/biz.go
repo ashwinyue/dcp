@@ -14,9 +14,7 @@ import (
 	cronjobv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/cronjob"
 	documentv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/document"
 	jobv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/job"
-	messagebatchv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/messagebatch"
 	postv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/post"
-	statustrackingv1 "github.com/ashwinyue/dcp/internal/nightwatch/biz/v1/statustracking"
 
 	// Post V2 版本（未实现，仅展示用）
 	// postv2 "github.com/ashwinyue/dcp/internal/apiserver/biz/v2/post".
@@ -37,12 +35,8 @@ type IBiz interface {
 	CronJobV1() cronjobv1.CronJobBiz
 	// JobV1 获取任务业务接口.
 	JobV1() jobv1.JobBiz
-	// MessageBatchV1 获取消息批处理业务接口.
-	MessageBatchV1() messagebatchv1.MessageBatchBiz
 	// PostV1 获取帖子业务接口.
 	PostV1() postv1.PostBiz
-	// StatusTrackingV1 获取状态跟踪业务接口.
-	StatusTrackingV1() statustrackingv1.StatusTrackingBiz
 	// PostV2 获取帖子业务接口（V2 版本）.
 	// PostV2() post.PostBiz
 
@@ -127,12 +121,3 @@ func (b *biz) Document() documentv1.DocumentBiz {
 	return documentv1.New(b.store)
 }
 
-// MessageBatchV1 返回一个实现了 MessageBatchBiz 接口的实例.
-func (b *biz) MessageBatchV1() messagebatchv1.MessageBatchBiz {
-	return messagebatchv1.New(b.store)
-}
-
-// StatusTrackingV1 返回一个实现了 StatusTrackingBiz 接口的实例.
-func (b *biz) StatusTrackingV1() statustrackingv1.StatusTrackingBiz {
-	return statustrackingv1.New(b.store, b.cacheManager)
-}
